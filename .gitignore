@@ -1,0 +1,5 @@
+*.exe
+.env
+config.yaml
+config.json
+remote.md
