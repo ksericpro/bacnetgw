@@ -104,3 +104,26 @@ This diagram illustrates the wiring and integration architecture for an **Exhibi
 | **BW-TH-M** | BG-1000-M (Wireless) | Temp (°C), RH (%)
 
 |
+
+
+---
+
+### 5. Production Monitored BACnet Points & Alarm Matrix (`Optergy BACnet Points.xlsx`)
+
+In production (`192.168.0.0/24` subnet, Gateway `192.168.0.1`), the monitored sensors are consolidated onto **Optergy P864** (`IP: 192.168.0.160`, `BACnet Device Instance: 864077`):
+
+| Sensor / System | BACnet Property | BACnet Object | Input / Comm | LED Output | Trigger Condition & Expected Response |
+| --- | --- | --- | --- | --- | --- |
+| **BW-INT-M** (Wireless Air Touch Display) | Temperature | `AI-101` | `BG-1000-M` | N/A | Live temperature reading (`°C`) & threshold check |
+| **BW-INT-M** (Wireless Air Touch Display) | Humidity | `AI-102` | `BG-1000-M` | N/A | Live relative humidity reading (`%RH`) |
+| **BW-INT-M** (Wireless Air Touch Display) | Temperature Setpoint | `AV-27126` | `BG-1000-M` | N/A | Live room setpoint (`°C`) |
+| **BW-TH-M** (Wireless Temp & Humidity) | Temperature | `AI-201` | `BG-1000-M` | N/A | High temperature alert; displays actual reading & threshold |
+| **BW-TH-M** (Wireless Temp & Humidity) | Humidity | `AI-202` | `BG-1000-M` | N/A | High humidity alert; displays actual `%RH` reading |
+| **WD3** (Water Leak) | Water detected | `BI-1` | `IN 1` (Dry Contact) | `LED 1` | Water leak icon flashes red; critical alarm & location displayed |
+| **MSA237D 99** (Motion Sensor) | Motion / presence detected | `BI-2` | `IN 2` (Dry Contact) | `LED 2` | Motion icon flashes; event timestamp recorded |
+| **Fire Sensor** | Fire alarm contact activated | `BI-3` | `IN 3` (Dry Contact) | `LED 3` | Fire icon flashes red; critical fire alarm displayed |
+| **Perimeter Intrusion (MAXIBUS)** | Intrusion Detector | `BI-4` | `IN 4` (Dry Contact) | `LED 4` | Perimeter intrusion icon flashes red; high-priority zone alarm |
+| **UPS Monitoring** | UPS on battery / power failure | `BI-5` | `IN 5` (Dry Contact) | `LED 5` | UPS icon flashes red; power failure alarm & UPS status displayed |
+| **Access Control System** | Unauthorized access / door forced | `BI-6` | `IN 6` (Dry Contact) | `LED 6` | Access door icon flashes red; security alarm displayed |
+| **Server Rack Door Contact** | Rack door opened unauthorized | `BI-7` | `IN 7` (Dry Contact) | `LED 7` | Affected rack icon flashes red; unauthorized access alarm displayed |
+| **Communication Health** | Controller / Switch reachability | Device `864077` | Ethernet / `RS485` | N/A | Communication fault icon flashes on poll timeout / device loss |

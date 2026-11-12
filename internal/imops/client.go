@@ -19,18 +19,20 @@ import (
 
 // DeviceRegistration describes a discovered BACnet controller sent to IMOPS.
 type DeviceRegistration struct {
-	DeviceID         uint32    `json:"device_id"`
-	ObjectName       string    `json:"object_name"`
-	ModelName        string    `json:"model_name,omitempty"`
-	VendorName       string    `json:"vendor_name,omitempty"`
-	VendorID         uint32    `json:"vendor_id"`
-	FirmwareRevision string    `json:"firmware_revision,omitempty"`
-	Description      string    `json:"description,omitempty"`
-	Location         string    `json:"location,omitempty"`
-	ControllerRole   string    `json:"controller_role,omitempty"`
-	Address          string    `json:"address"`
-	PointCount       int       `json:"point_count"`
-	DiscoveredAt     time.Time `json:"discovered_at"`
+	DeviceID            uint32    `json:"device_id"`
+	ObjectName          string    `json:"object_name"`
+	ModelName           string    `json:"model_name,omitempty"`
+	VendorName          string    `json:"vendor_name,omitempty"`
+	VendorID            uint32    `json:"vendor_id"`
+	FirmwareRevision    string    `json:"firmware_revision,omitempty"`
+	Description         string    `json:"description,omitempty"`
+	Location            string    `json:"location,omitempty"`
+	ControllerRole      string    `json:"controller_role,omitempty"`
+	Address             string    `json:"address"`
+	Online              bool      `json:"online"`
+	CommunicationStatus string    `json:"communication_status,omitempty"` // "online" | "communication_failure"
+	PointCount          int       `json:"point_count"`
+	DiscoveredAt        time.Time `json:"discovered_at"`
 }
 
 // DeviceEnvelope wraps a device registration POST body.
@@ -52,7 +54,10 @@ type TelemetryReading struct {
 	ObjectType       string             `json:"object_type"`
 	ObjectInstance   uint32             `json:"object_instance"`
 	ObjectID         string             `json:"object_id"`
+	ShortObjectID    string             `json:"short_object_id"`            // e.g. "AI-101", "AV-27126", "BI-1".."BI-7"
 	PointName        string             `json:"point_name"`
+	PropertyLabel    string             `json:"property_label,omitempty"`   // e.g. "Temperature", "Water detected"
+	DashboardLabel   string             `json:"dashboard_label,omitempty"`  // e.g. "BW-INT-M", "WD3", "Fire Detection Sensor"
 	Description      string             `json:"description,omitempty"`
 	EquipmentProfile string             `json:"equipment_profile,omitempty"`
 	ConnectionBus    string             `json:"connection_bus,omitempty"`
@@ -60,7 +65,9 @@ type TelemetryReading struct {
 	ValueText        string             `json:"value_text,omitempty"`
 	Unit             string             `json:"unit,omitempty"`
 	UnitID           *uint32            `json:"unit_id,omitempty"`
-	Quality          string             `json:"quality"` // "good" | "alarm" | "fault" | "overridden" | "out_of_service"
+	IsTriggered      bool               `json:"is_triggered"`               // True when dry contact / threshold is active
+	IsAlarm          bool               `json:"is_alarm"`                   // True when alarm dry contact (BI-1, BI-3..BI-7) or StatusFlags.InAlarm is active
+	Quality          string             `json:"quality"`                    // "good" | "alarm" | "fault" | "overridden" | "out_of_service"
 	StatusFlags      bacnet.StatusFlags `json:"status_flags"`
 }
 
@@ -85,6 +92,8 @@ type PacketBatchEnvelope struct {
 
 // Stats tracks IMOPS delivery metrics for diagnostics and health checks.
 type Stats struct {
+	Enabled         bool   `json:"enabled"`
+	AuthType        string `json:"auth_type,omitempty"`
 	BatchesSent     uint64 `json:"batches_sent"`
 	ReadingsSent    uint64 `json:"readings_sent"`
 	DevicesSent     uint64 `json:"devices_sent"`
@@ -104,6 +113,9 @@ type Client struct {
 	logger     *slog.Logger
 
 	batchSeq atomic.Uint64
+
+	tokenMu     sync.Mutex
+	cachedToken string
 
 	mu          sync.Mutex
 	readingBuf  []TelemetryReading
@@ -150,6 +162,10 @@ func NewClient(gatewayID, siteName string, cfg config.IMOPSConfig, logger *slog.
 		logger:  logger,
 		flushCh: make(chan struct{}, 1),
 		closed:  make(chan struct{}),
+	}
+
+	if !cfg.Enabled {
+		logger.Info("IMOPS API forwarding is disabled (set imops.enabled=true or IMOPS_ENABLED=true to enable)")
 	}
 
 	c.wg.Add(1)
@@ -305,6 +321,8 @@ func (c *Client) SnapshotStats() Stats {
 	c.mu.Unlock()
 
 	return Stats{
+		Enabled:         c.cfg.Enabled,
+		AuthType:        c.cfg.AuthType,
 		BatchesSent:     c.batchesSent.Load(),
 		ReadingsSent:    c.readingsSent.Load(),
 		DevicesSent:     c.devicesSent.Load(),
@@ -351,6 +369,7 @@ func (c *Client) postJSON(ctx context.Context, endpointPath string, body any) er
 	}
 
 	var lastErr error
+	refreshedLogin := false
 	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
 			backoff := baseBackoff * time.Duration(1<<(attempt-1))
@@ -367,7 +386,10 @@ func (c *Client) postJSON(ctx context.Context, endpointPath string, body any) er
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "zaarr-bacnet-gw/1.0")
-		c.applyAuthHeaders(req)
+		if authErr := c.applyAuthHeaders(ctx, base, req); authErr != nil {
+			lastErr = authErr
+			continue
+		}
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
@@ -386,6 +408,14 @@ func (c *Client) postJSON(ctx context.Context, endpointPath string, body any) er
 			return nil
 		}
 
+		// If using auth_type="login" and token expired (401), clear cached token and retry once immediately
+		if resp.StatusCode == http.StatusUnauthorized && isLoginAuth(c.cfg.AuthType) && !refreshedLogin {
+			refreshedLogin = true
+			c.clearCachedToken()
+			attempt--
+			continue
+		}
+
 		lastErr = fmt.Errorf("IMOPS HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		// Retry only on 429 or 5xx
 		if resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
@@ -402,8 +432,100 @@ func (c *Client) postJSON(ctx context.Context, endpointPath string, body any) er
 	return lastErr
 }
 
-func (c *Client) applyAuthHeaders(req *http.Request) {
+func isLoginAuth(authType string) bool {
+	switch strings.ToLower(strings.TrimSpace(authType)) {
+	case "login", "jwt", "token_login":
+		return true
+	default:
+		return false
+	}
+}
+
+func (c *Client) clearCachedToken() {
+	c.tokenMu.Lock()
+	c.cachedToken = ""
+	c.tokenMu.Unlock()
+}
+
+func (c *Client) getOrFetchLoginToken(ctx context.Context, baseURL string) (string, error) {
+	c.tokenMu.Lock()
+	if c.cachedToken != "" {
+		tok := c.cachedToken
+		c.tokenMu.Unlock()
+		return tok, nil
+	}
+	c.tokenMu.Unlock()
+
+	loginPath := strings.TrimSpace(c.cfg.LoginPath)
+	if loginPath == "" {
+		loginPath = "/api/v1/auth/login"
+	}
+	if !strings.HasPrefix(loginPath, "/") {
+		loginPath = "/" + loginPath
+	}
+	bodyBytes, _ := json.Marshal(map[string]string{
+		"username": c.cfg.EffectiveUsername(),
+		"password": c.cfg.EffectivePassword(),
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+loginPath, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("build IMOPS login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "zaarr-bacnet-gw/1.0")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("IMOPS login request failed: %w", err)
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+	_ = resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("IMOPS login HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "", fmt.Errorf("parse IMOPS login response: %w", err)
+	}
+	tok := extractTokenString(parsed)
+	if tok == "" {
+		return "", fmt.Errorf("IMOPS login response did not include token/access_token")
+	}
+
+	c.tokenMu.Lock()
+	c.cachedToken = tok
+	c.tokenMu.Unlock()
+	return tok, nil
+}
+
+func extractTokenString(m map[string]any) string {
+	for _, key := range []string{"token", "access_token", "accessToken", "jwt"} {
+		if s, ok := m[key].(string); ok && strings.TrimSpace(s) != "" {
+			return strings.TrimSpace(s)
+		}
+	}
+	if dataMap, ok := m["data"].(map[string]any); ok {
+		return extractTokenString(dataMap)
+	}
+	return ""
+}
+
+func (c *Client) applyAuthHeaders(ctx context.Context, baseURL string, req *http.Request) error {
 	switch strings.ToLower(strings.TrimSpace(c.cfg.AuthType)) {
+	case "basic", "username_password", "userpass":
+		user := c.cfg.EffectiveUsername()
+		pass := c.cfg.EffectivePassword()
+		if user != "" || pass != "" {
+			req.SetBasicAuth(user, pass)
+		}
+	case "login", "jwt", "token_login":
+		tok, err := c.getOrFetchLoginToken(ctx, baseURL)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
 	case "bearer":
 		if c.cfg.BearerToken != "" {
 			req.Header.Set("Authorization", "Bearer "+c.cfg.BearerToken)
@@ -416,10 +538,6 @@ func (c *Client) applyAuthHeaders(req *http.Request) {
 		if c.cfg.APIKey != "" {
 			req.Header.Set(hdr, c.cfg.APIKey)
 		}
-	case "basic":
-		if c.cfg.BasicUsername != "" || c.cfg.BasicPassword != "" {
-			req.SetBasicAuth(c.cfg.BasicUsername, c.cfg.BasicPassword)
-		}
 	}
 
 	for k, v := range c.cfg.ExtraHeaders {
@@ -427,6 +545,7 @@ func (c *Client) applyAuthHeaders(req *http.Request) {
 			req.Header.Set(k, v)
 		}
 	}
+	return nil
 }
 
 func truncatePreview(s string, maxLen int) string {

@@ -3,6 +3,8 @@ package bacnet
 import (
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -172,6 +174,76 @@ type ObjectID struct {
 
 func (id ObjectID) String() string {
 	return fmt.Sprintf("%s:%d", id.Type.String(), id.Instance)
+}
+
+// ShortCode returns standard BMS shorthand like "AI-101", "AV-27126", "BI-1" matching Optergy BACnet Points.xlsx.
+func (id ObjectID) ShortCode() string {
+	var prefix string
+	switch id.Type {
+	case ObjAnalogInput:
+		prefix = "AI"
+	case ObjAnalogOutput:
+		prefix = "AO"
+	case ObjAnalogValue:
+		prefix = "AV"
+	case ObjBinaryInput:
+		prefix = "BI"
+	case ObjBinaryOutput:
+		prefix = "BO"
+	case ObjBinaryValue:
+		prefix = "BV"
+	case ObjMultiStateInput:
+		prefix = "MSI"
+	case ObjMultiStateOutput:
+		prefix = "MSO"
+	case ObjMultiStateValue:
+		prefix = "MSV"
+	case ObjDevice:
+		prefix = "DEV"
+	default:
+		return id.String()
+	}
+	return fmt.Sprintf("%s-%d", prefix, id.Instance)
+}
+
+// ParseShortObjectID parses strings like "AI-101", "AV-27126", "BI-1", or "analog-input:101" into an ObjectID.
+func ParseShortObjectID(s string) (ObjectID, error) {
+	clean := strings.TrimSpace(s)
+	var typPart, instPart string
+	if idx := strings.IndexAny(clean, "-:"); idx > 0 {
+		typPart = strings.ToUpper(strings.TrimSpace(clean[:idx]))
+		instPart = strings.TrimSpace(clean[idx+1:])
+	} else {
+		return ObjectID{}, fmt.Errorf("invalid BACnet object reference %q", s)
+	}
+	inst, err := strconv.ParseUint(instPart, 10, 32)
+	if err != nil {
+		return ObjectID{}, fmt.Errorf("invalid BACnet instance in %q: %w", s, err)
+	}
+	var ot ObjectType
+	switch typPart {
+	case "AI", "ANALOG-INPUT", "ANALOG_INPUT":
+		ot = ObjAnalogInput
+	case "AO", "ANALOG-OUTPUT", "ANALOG_OUTPUT":
+		ot = ObjAnalogOutput
+	case "AV", "ANALOG-VALUE", "ANALOG_VALUE":
+		ot = ObjAnalogValue
+	case "BI", "BINARY-INPUT", "BINARY_INPUT":
+		ot = ObjBinaryInput
+	case "BO", "BINARY-OUTPUT", "BINARY_OUTPUT":
+		ot = ObjBinaryOutput
+	case "BV", "BINARY-VALUE", "BINARY_VALUE":
+		ot = ObjBinaryValue
+	case "MSI", "MULTI-STATE-INPUT":
+		ot = ObjMultiStateInput
+	case "MSO", "MULTI-STATE-OUTPUT":
+		ot = ObjMultiStateOutput
+	case "MSV", "MULTI-STATE-VALUE":
+		ot = ObjMultiStateValue
+	default:
+		return ObjectID{}, fmt.Errorf("unsupported BACnet object prefix %q", typPart)
+	}
+	return ObjectID{Type: ot, Instance: uint32(inst)}, nil
 }
 
 // PropertyID represents an ASHRAE-135 BACnetPropertyIdentifier.

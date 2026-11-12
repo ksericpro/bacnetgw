@@ -1,4 +1,4 @@
-//go:build !windows
+//go:build !windows && !linux
 
 package bacnet
 
@@ -19,4 +19,3 @@ func socketControl(reusePort bool) func(network, address string, c syscall.RawCo
 		return sockErr
 	}
 }
-

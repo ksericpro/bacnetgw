@@ -1,0 +1,30 @@
+[Unit]
+Description=Optergy P864 BACnet/IP Listener & IMOPS Gateway (bacnet-gw)
+Documentation=https://github.com/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=bacnetgw
+Group=bacnetgw
+WorkingDirectory=/opt/bacnet-gw
+EnvironmentFile=-/opt/bacnet-gw/.env
+ExecStart=/opt/bacnet-gw/bacnet-gw -config /opt/bacnet-gw/config.yaml
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bacnet-gw
+
+# Security hardening (UDP 47808 and TCP 8090 are unprivileged ports >1024)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/bacnet-gw
+
+[Install]
+WantedBy=multi-user.target
+

@@ -13,6 +13,7 @@ func TestLoadYAMLAndEnvOverrides(t *testing.T) {
 gateway_id: "exhibition-gw-test"
 site_name: "Booth 12"
 network:
+  subnet: "192.168.0.0/24"
   port: 47809
   reuse_port: true
   broadcast_overrides:
@@ -42,6 +43,9 @@ imops:
 	}
 	if cfg.Network.Port != 47809 {
 		t.Fatalf("unexpected port %d", cfg.Network.Port)
+	}
+	if cfg.Network.EffectiveSubnet() != "192.168.0.0/24" {
+		t.Fatalf("unexpected effective subnet %q", cfg.Network.EffectiveSubnet())
 	}
 	if len(cfg.Network.BroadcastOverrides) != 1 || cfg.Network.BroadcastOverrides[0] != "192.168.10.255:47808" {
 		t.Fatalf("unexpected broadcast_overrides: %+v", cfg.Network.BroadcastOverrides)

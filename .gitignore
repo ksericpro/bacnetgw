@@ -1,5 +1,10 @@
 *.exe
+dist/
+bacnet-gw
+bacnet-gw-linux-amd64
+mock-exhibition-linux-amd64
 .env
 config.yaml
 config.json
 remote.md
+SMART NATION - CHECKLIST.pdf

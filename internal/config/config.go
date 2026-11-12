@@ -30,6 +30,7 @@ type StatusAPICfg struct {
 
 // NetworkConfig configures BACnet/IP subnet binding, broadcast discovery, and optional BBMD.
 type NetworkConfig struct {
+	Subnet             string   `json:"subnet"`               // Optional target subnet CIDR, IP, prefix, or NIC name (e.g. "192.168.0.0/24")
 	Interface          string   `json:"interface"`            // Optional NIC name (empty = auto-detect all IPv4 subnets)
 	BindIP             string   `json:"bind_ip"`              // Default "0.0.0.0"
 	Port               int      `json:"port"`                 // Default 47808 (0xBAC0)
@@ -42,38 +43,67 @@ type NetworkConfig struct {
 	IncludeRawHex      bool     `json:"include_raw_hex"`      // Attach raw hex payload to packet events
 }
 
+// EffectiveSubnet returns the configured subnet selector (preferring Subnet over legacy Interface).
+func (n NetworkConfig) EffectiveSubnet() string {
+	if s := strings.TrimSpace(n.Subnet); s != "" {
+		return s
+	}
+	return strings.TrimSpace(n.Interface)
+}
+
 // PollingConfig configures BACnet discovery, object polling, COV subscriptions, and packet forwarding.
 type PollingConfig struct {
 	DiscoveryIntervalSec   int      `json:"discovery_interval_sec"`    // Who-Is broadcast interval (default 60s)
 	MetadataRefreshSec     int      `json:"metadata_refresh_sec"`      // Re-scan Object_List interval (default 600s)
-	PollIntervalSec        int      `json:"poll_interval_sec"`         // Present_Value read interval (default 15s)
+	PollIntervalSec        int      `json:"poll_interval_sec"`         // Present_Value read interval (default 5s)
 	RPMBatchSize           int      `json:"rpm_batch_size"`            // Max objects per ReadPropertyMultiple request (default 8)
 	SubscribeCOV           bool     `json:"subscribe_cov"`             // Subscribe to Unconfirmed COV on binary/analog inputs
 	COVLifetimeSec         uint32   `json:"cov_lifetime_sec"`          // COV subscription lifetime (default 300s)
 	ForwardPacketEvents    bool     `json:"forward_packet_events"`     // Forward decoded BACnet packet stream to IMOPS events endpoint
-	AllowedDeviceIDs       []uint32 `json:"allowed_device_ids"`        // Empty = integrate all discovered BACnet devices on subnet
+	OnlyCatalogPoints      bool     `json:"only_catalog_points"`       // Monitor only production points from Optergy BACnet Points.xlsx (default true)
+	ExtraObjectIDs         []string `json:"extra_object_ids"`          // Additional BACnet objects to poll, e.g. ["AI-301", "BI-8"]
+	AllowedDeviceIDs       []uint32 `json:"allowed_device_ids"`        // Empty = allow all discovered controllers (or e.g. [864077])
 }
 
 // IMOPSConfig configures the external IMOPS HTTP API client.
 type IMOPSConfig struct {
-	Enabled           bool              `json:"enabled"`
+	Enabled           bool              `json:"enabled"`            // true = push to IMOPS; false = disable IMOPS completely
 	BaseURL           string            `json:"base_url"`
 	TelemetryPath     string            `json:"telemetry_path"`
 	DevicesPath       string            `json:"devices_path"`
 	PacketEventsPath  string            `json:"packet_events_path"`
-	AuthType          string            `json:"auth_type"`        // "none" | "bearer" | "api_key" | "basic"
-	APIKeyHeader      string            `json:"api_key_header"`   // Default "X-API-Key"
+	LoginPath         string            `json:"login_path"`         // Token login path when auth_type="login" (default "/api/v1/auth/login")
+	AuthType          string            `json:"auth_type"`          // "basic" (username+password) | "login" (POST username+password -> token) | "bearer" | "api_key" | "none"
+	Username          string            `json:"username"`           // IMOPS username
+	Password          string            `json:"password"`           // IMOPS password
+	APIKeyHeader      string            `json:"api_key_header"`     // Default "X-API-Key"
 	APIKey            string            `json:"api_key"`
 	BearerToken       string            `json:"bearer_token"`
-	BasicUsername     string            `json:"basic_username"`
-	BasicPassword     string            `json:"basic_password"`
+	BasicUsername     string            `json:"basic_username"`     // Legacy alias for username
+	BasicPassword     string            `json:"basic_password"`     // Legacy alias for password
 	ExtraHeaders      map[string]string `json:"extra_headers"`
-	BatchMaxPoints    int               `json:"batch_max_points"` // Max readings per HTTP POST (default 100)
+	BatchMaxPoints    int               `json:"batch_max_points"`   // Max readings per HTTP POST (default 100)
 	FlushIntervalMS   int               `json:"flush_interval_ms"`
 	HTTPTimeoutMS     int               `json:"http_timeout_ms"`
 	MaxRetries        int               `json:"max_retries"`
 	RetryBaseBackoffM int               `json:"retry_base_backoff_ms"`
 	DryRunLogPayloads bool              `json:"dry_run_log_payloads"` // Log outbound JSON when BaseURL is not set yet
+}
+
+// EffectiveUsername returns Username (falling back to legacy BasicUsername).
+func (c IMOPSConfig) EffectiveUsername() string {
+	if c.Username != "" {
+		return c.Username
+	}
+	return c.BasicUsername
+}
+
+// EffectivePassword returns Password (falling back to legacy BasicPassword).
+func (c IMOPSConfig) EffectivePassword() string {
+	if c.Password != "" {
+		return c.Password
+	}
+	return c.BasicPassword
 }
 
 // Default returns production-ready defaults for same-subnet Optergy BACnet discovery & IMOPS delivery.
@@ -103,11 +133,12 @@ func Default() Config {
 		Polling: PollingConfig{
 			DiscoveryIntervalSec: 60,
 			MetadataRefreshSec:   600,
-			PollIntervalSec:      15,
+			PollIntervalSec:      5,
 			RPMBatchSize:         8,
 			SubscribeCOV:         true,
 			COVLifetimeSec:       300,
 			ForwardPacketEvents:  false,
+			OnlyCatalogPoints:    true,
 		},
 		IMOPS: IMOPSConfig{
 			Enabled:           true,
@@ -115,7 +146,8 @@ func Default() Config {
 			TelemetryPath:     "/api/v1/bacnet/telemetry",
 			DevicesPath:       "/api/v1/bacnet/devices",
 			PacketEventsPath:  "/api/v1/bacnet/packets",
-			AuthType:          "api_key",
+			LoginPath:         "/api/v1/auth/login",
+			AuthType:          "basic",
 			APIKeyHeader:      "X-API-Key",
 			ExtraHeaders:      map[string]string{},
 			BatchMaxPoints:    100,
@@ -254,6 +286,9 @@ func applyEnvOverrides(cfg *Config) {
 	}
 
 	// Network overrides
+	if v := os.Getenv("BACNET_SUBNET"); v != "" {
+		cfg.Network.Subnet = v
+	}
 	if v := os.Getenv("BACNET_INTERFACE"); v != "" {
 		cfg.Network.Interface = v
 	}
@@ -289,6 +324,12 @@ func applyEnvOverrides(cfg *Config) {
 	if v, ok := envBool("BACNET_FORWARD_PACKET_EVENTS"); ok {
 		cfg.Polling.ForwardPacketEvents = v
 	}
+	if v, ok := envBool("BACNET_ONLY_CATALOG_POINTS"); ok {
+		cfg.Polling.OnlyCatalogPoints = v
+	}
+	if v := os.Getenv("BACNET_EXTRA_OBJECT_IDS"); v != "" {
+		cfg.Polling.ExtraObjectIDs = splitCSV(v)
+	}
 
 	// IMOPS overrides
 	if v, ok := envBool("IMOPS_ENABLED"); ok {
@@ -306,8 +347,17 @@ func applyEnvOverrides(cfg *Config) {
 	if v := os.Getenv("IMOPS_PACKET_EVENTS_PATH"); v != "" {
 		cfg.IMOPS.PacketEventsPath = v
 	}
+	if v := os.Getenv("IMOPS_LOGIN_PATH"); v != "" {
+		cfg.IMOPS.LoginPath = v
+	}
 	if v := os.Getenv("IMOPS_AUTH_TYPE"); v != "" {
 		cfg.IMOPS.AuthType = v
+	}
+	if v := os.Getenv("IMOPS_USERNAME"); v != "" {
+		cfg.IMOPS.Username = v
+	}
+	if v := os.Getenv("IMOPS_PASSWORD"); v != "" {
+		cfg.IMOPS.Password = v
 	}
 	if v := os.Getenv("IMOPS_API_KEY_HEADER"); v != "" {
 		cfg.IMOPS.APIKeyHeader = v
@@ -477,6 +527,8 @@ func resetYAMLList(cfg *Config, path string) {
 		cfg.Network.BroadcastOverrides = nil
 	case "polling.allowed_device_ids":
 		cfg.Polling.AllowedDeviceIDs = nil
+	case "polling.extra_object_ids":
+		cfg.Polling.ExtraObjectIDs = nil
 	}
 }
 
@@ -490,6 +542,8 @@ func appendYAMLListItem(cfg *Config, path string, val string) error {
 			return err
 		}
 		cfg.Polling.AllowedDeviceIDs = append(cfg.Polling.AllowedDeviceIDs, uint32(u))
+	case "polling.extra_object_ids":
+		cfg.Polling.ExtraObjectIDs = append(cfg.Polling.ExtraObjectIDs, val)
 	}
 	return nil
 }
@@ -520,6 +574,8 @@ func setYAMLField(cfg *Config, path string, val string) error {
 	case "status_api.listen_addr":
 		cfg.StatusAPI.ListenAddr = val
 
+	case "network.subnet":
+		cfg.Network.Subnet = val
 	case "network.interface":
 		cfg.Network.Interface = val
 	case "network.bind_ip":
@@ -605,6 +661,12 @@ func setYAMLField(cfg *Config, path string, val string) error {
 			return err
 		}
 		cfg.Polling.ForwardPacketEvents = b
+	case "polling.only_catalog_points":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		cfg.Polling.OnlyCatalogPoints = b
 
 	case "imops.enabled":
 		b, err := strconv.ParseBool(val)
@@ -620,8 +682,14 @@ func setYAMLField(cfg *Config, path string, val string) error {
 		cfg.IMOPS.DevicesPath = val
 	case "imops.packet_events_path":
 		cfg.IMOPS.PacketEventsPath = val
+	case "imops.login_path":
+		cfg.IMOPS.LoginPath = val
 	case "imops.auth_type":
 		cfg.IMOPS.AuthType = val
+	case "imops.username":
+		cfg.IMOPS.Username = val
+	case "imops.password":
+		cfg.IMOPS.Password = val
 	case "imops.api_key_header":
 		cfg.IMOPS.APIKeyHeader = val
 	case "imops.api_key":

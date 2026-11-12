@@ -388,6 +388,44 @@ func (sc *SimController) encodePropertyValue(obj bacnet.ObjectID, prop bacnet.Pr
 	}
 }
 
+// NewProductionP864Controller constructs a simulated Optergy P864 controller (Device Instance 864077)
+// matching the exact 12 production BACnet points in 'Optergy BACnet Points.xlsx' (plus a spare unmonitored point).
+func NewProductionP864Controller() *SimController {
+	p864 := &SimController{
+		DeviceID:         864077,
+		ObjectName:       "Optergy-P864",
+		ModelName:        "P864",
+		VendorName:       "Optergy",
+		VendorID:         681,
+		FirmwareRevision: "4.8.2",
+		Description:      "Production P864 Controller (192.168.0.160)",
+		Location:         "Smart Nation Facility",
+	}
+	p864.AddPoints(
+		// BW-INT-M (WIRELESS AIR TOUCH DISPLAY)
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjAnalogInput, Instance: 101}, Name: "BW-INT-M Temperature", Description: "Wireless Air Touch Display Temperature", UnitID: 62, PresentValue: float32(22.6)},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjAnalogInput, Instance: 102}, Name: "BW-INT-M Humidity", Description: "Wireless Air Touch Display Humidity", UnitID: 29, PresentValue: float32(49.5)},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjAnalogValue, Instance: 27126}, Name: "BW-INT-M Setpoint", Description: "Wireless Air Touch Temperature Setpoint", UnitID: 62, PresentValue: float32(22.0)},
+
+		// BW-TH-M (WIRELESS TEMPERATURE & HUMIDITY SENSOR)
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjAnalogInput, Instance: 201}, Name: "BW-TH-M Temperature", Description: "Wireless Temp & Humidity Sensor Temperature", UnitID: 62, PresentValue: float32(24.2)},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjAnalogInput, Instance: 202}, Name: "BW-TH-M Humidity", Description: "Wireless Temp & Humidity Sensor Humidity", UnitID: 29, PresentValue: float32(52.8)},
+
+		// Dry Contact Binary Inputs BI-1 .. BI-7
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 1}, Name: "WD3 Water Leak", Description: "Water detected (IN 1 / LED 1)", PresentValue: uint32(0), InactiveText: "Normal", ActiveText: "Water Detected"},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 2}, Name: "MSA237D 99 Motion", Description: "Motion / presence detected (IN 2 / LED 2)", PresentValue: uint32(0), InactiveText: "Clear", ActiveText: "Motion Detected"},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 3}, Name: "Fire Sensor", Description: "Fire alarm contact activated (IN 3 / LED 3)", PresentValue: uint32(0), InactiveText: "Normal", ActiveText: "Fire Alarm"},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 4}, Name: "Perimeter Intrusion", Description: "MAXIBUS Intrusion Detector (IN 4 / LED 4)", PresentValue: uint32(0), InactiveText: "Secure", ActiveText: "Intrusion Detected"},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 5}, Name: "UPS Monitoring", Description: "UPS on battery / power failure (IN 5 / LED 5)", PresentValue: uint32(0), InactiveText: "Mains OK", ActiveText: "UPS On Battery"},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 6}, Name: "Access Control System", Description: "Unauthorized access / door forced open (IN 6 / LED 6)", PresentValue: uint32(0), InactiveText: "Secure", ActiveText: "Door Forced Open"},
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjBinaryInput, Instance: 7}, Name: "Server Rack Door Contact", Description: "Rack door opened without authorization (IN 7 / LED 7)", PresentValue: uint32(0), InactiveText: "Closed", ActiveText: "Rack Door Opened"},
+
+		// Unmonitored spare internal point on P864 (should be ignored when only_catalog_points=true)
+		SimPoint{ObjectID: bacnet.ObjectID{Type: bacnet.ObjAnalogValue, Instance: 999}, Name: "Spare_Internal_AV999", Description: "Unmonitored internal variable", UnitID: 95, PresentValue: float32(0)},
+	)
+	return p864
+}
+
 // NewExhibitionControllers constructs simulated Optergy AXON, P864, and P442 controllers
 // matching 'bacnet devices to be integrated.md'.
 func NewExhibitionControllers() []*SimController {

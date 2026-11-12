@@ -11,6 +11,7 @@ func (g *Gateway) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write([]byte(dashboardHTML))
 }
 
@@ -28,7 +29,7 @@ func serveLocalJPEG(w http.ResponseWriter, r *http.Request, filename string) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "public, max-age=300")
+	w.Header().Set("Cache-Control", "no-cache")
 	http.ServeFile(w, r, filename)
 }
 
@@ -37,7 +38,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>BACnet/IP Subnet Listener & IMOPS Gateway</title>
+<title>Optergy P864 BACnet Listener & IMOPS Gateway</title>
 <style>
   :root {
     --bg: #0b1120;
@@ -57,7 +58,7 @@ const dashboardHTML = `<!DOCTYPE html>
     background: var(--bg);
     color: var(--text);
     line-height: 1.45;
-    padding: 18px 24px;
+    padding: 16px 22px;
   }
   header {
     display: flex;
@@ -65,20 +66,20 @@ const dashboardHTML = `<!DOCTYPE html>
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding-bottom: 16px;
+    padding-bottom: 14px;
     border-bottom: 1px solid var(--border);
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
-  .title-group h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
-  .title-group p { font-size: 0.85rem; color: var(--muted); }
-  .actions { display: flex; align-items: center; gap: 10px; }
+  .title-group h1 { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; }
+  .title-group p { font-size: 0.82rem; color: var(--muted); }
+  .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   button {
     background: #0284c7;
     color: #fff;
     border: none;
     border-radius: 6px;
-    padding: 8px 14px;
-    font-size: 0.85rem;
+    padding: 7px 13px;
+    font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;
     transition: background 0.15s;
@@ -86,30 +87,43 @@ const dashboardHTML = `<!DOCTYPE html>
   button:hover { background: #0369a1; }
   button.secondary { background: var(--panel-alt); border: 1px solid var(--border); color: var(--text); }
   button.secondary:hover { background: #334155; }
+  select.subnet-picker {
+    background: var(--panel-alt);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    outline: none;
+  }
+  select.subnet-picker:focus { border-color: var(--accent); }
 
   .kpi-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 12px;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
   .kpi {
     background: var(--panel);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 12px 15px;
+    padding: 11px 14px;
   }
-  .kpi .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-  .kpi .val { font-size: 1.45rem; font-weight: 700; margin-top: 4px; color: var(--accent); }
-  .kpi .sub { font-size: 0.75rem; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .kpi .label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .kpi .val { font-size: 1.4rem; font-weight: 700; margin-top: 3px; color: var(--accent); }
+  .kpi .val.alarm-text { color: var(--alarm); }
+  .kpi .sub { font-size: 0.74rem; color: var(--muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   .main-grid {
     display: grid;
-    grid-template-columns: 1.35fr 1fr;
+    grid-template-columns: 1.42fr 1fr;
     gap: 16px;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
-  @media (max-width: 1100px) { .main-grid { grid-template-columns: 1fr; } }
+  @media (max-width: 1200px) { .main-grid { grid-template-columns: 1fr; } }
 
   .card {
     background: var(--panel);
@@ -121,66 +135,96 @@ const dashboardHTML = `<!DOCTYPE html>
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 11px 15px;
-    background: rgba(30, 41, 59, 0.55);
+    padding: 10px 14px;
+    background: rgba(30, 41, 59, 0.6);
     border-bottom: 1px solid var(--border);
     font-weight: 600;
-    font-size: 0.9rem;
+    font-size: 0.88rem;
   }
   .twin-wrap {
     position: relative;
     width: 100%;
-    background: #0f172a;
+    background: #ffffff;
     min-height: 320px;
   }
   .twin-wrap img {
     width: 100%;
     display: block;
     height: auto;
-    opacity: 0.94;
   }
-  .hotspot {
+  .pill {
     position: absolute;
     transform: translate(-50%, -50%);
-    background: rgba(15, 23, 42, 0.9);
+    background: rgba(15, 23, 42, 0.92);
     border: 1.5px solid var(--accent);
-    border-radius: 8px;
-    padding: 5px 9px;
-    font-size: 0.74rem;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+    border-radius: 7px;
+    padding: 3px 8px;
+    font-size: 0.7rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.45);
     backdrop-filter: blur(4px);
-    min-width: 118px;
-    pointer-events: auto;
+    white-space: nowrap;
+    z-index: 3;
+    transition: all 0.2s ease;
   }
-  .hotspot.alarm { border-color: var(--alarm); background: rgba(69, 10, 10, 0.92); }
-  .hotspot .hs-title { font-weight: 700; color: #e2e8f0; font-size: 0.7rem; margin-bottom: 2px; }
-  .hotspot .hs-val { font-weight: 700; color: var(--accent); font-size: 0.84rem; }
-  .hotspot.alarm .hs-val { color: #fca5a5; }
+  .pill .p-tag {
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: #cbd5e1;
+    letter-spacing: 0.02em;
+  }
+  .pill .p-val {
+    font-weight: 700;
+    color: var(--accent);
+    font-size: 0.76rem;
+  }
+  .pill.ok { border-color: #22c55e; }
+  .pill.ok .p-val { color: #4ade80; }
+  .pill.active-event {
+    border-color: var(--warn);
+    background: rgba(69, 39, 6, 0.94);
+  }
+  .pill.active-event .p-val { color: #fcd34d; }
+  .pill.alarm {
+    border-color: var(--alarm);
+    background: rgba(127, 29, 29, 0.96);
+    animation: pulseAlarm 1.1s infinite alternate;
+    z-index: 6;
+  }
+  .pill.alarm .p-val { color: #fecaca; }
 
-  .table-wrap { max-height: 440px; overflow-y: auto; }
-  table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
-  th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid rgba(51, 65, 85, 0.5); }
-  th { position: sticky; top: 0; background: var(--panel-alt); color: var(--muted); font-weight: 600; }
+  @keyframes pulseAlarm {
+    from { box-shadow: 0 0 6px rgba(239,68,68,0.6); transform: translate(-50%, -50%) scale(1.0); }
+    to   { box-shadow: 0 0 18px rgba(239,68,68,1.0); transform: translate(-50%, -50%) scale(1.05); }
+  }
+
+  .table-wrap { max-height: 520px; overflow-y: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+  th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid rgba(51, 65, 85, 0.5); }
+  th { position: sticky; top: 0; background: var(--panel-alt); color: var(--muted); font-weight: 600; z-index: 2; }
+  tr.row-alarm { background: rgba(239, 68, 68, 0.12); }
   .badge {
     display: inline-block;
     padding: 2px 7px;
     border-radius: 999px;
-    font-size: 0.7rem;
-    font-weight: 600;
+    font-size: 0.68rem;
+    font-weight: 700;
   }
   .badge.good { background: rgba(34,197,94,0.16); color: #4ade80; }
-  .badge.alarm { background: rgba(239,68,68,0.22); color: #f87171; }
-  .badge.other { background: rgba(245,158,11,0.2); color: #fbbf24; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.76rem; }
+  .badge.event { background: rgba(245,158,11,0.22); color: #fbbf24; }
+  .badge.alarm { background: rgba(239,68,68,0.28); color: #fca5a5; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 0.74rem; }
 </style>
 </head>
 <body>
 <header>
   <div class="title-group">
-    <h1 id="siteTitle">BACnet/IP Subnet Listener & IMOPS Gateway</h1>
-    <p id="listenInfo">Listening on UDP 47808 • Auto-refreshing every 2s</p>
+    <h1 id="siteTitle">Optergy P864 BACnet Listener & IMOPS Gateway</h1>
+    <p id="listenInfo">Target: P864 (Device 864077 @ 192.168.0.160) • UDP 47808</p>
   </div>
   <div class="actions">
+    <select id="subnetSelect" class="subnet-picker" onchange="onSelectSubnet(this.value)" title="Select local IPv4 subnet for BACnet discovery">
+      <option value="">Subnet: All Detected (Auto)</option>
+    </select>
     <button onclick="triggerDiscover()">Broadcast Who-Is Now</button>
     <button class="secondary" onclick="toggleVisual()" id="toggleBtn">Show Wiring Diagram</button>
     <a href="/status" target="_blank"><button class="secondary">Raw /status JSON</button></a>
@@ -189,59 +233,86 @@ const dashboardHTML = `<!DOCTYPE html>
 
 <section class="kpi-grid">
   <div class="kpi">
-    <div class="label">Discovered Controllers</div>
-    <div class="val" id="kpiDevices">0</div>
-    <div class="sub" id="kpiSubnets">Detecting subnets...</div>
+    <div class="label">P864 Controller Status</div>
+    <div class="val" id="kpiDevices">Scanning...</div>
+    <div class="sub" id="kpiSubnets">Detecting subnet...</div>
   </div>
   <div class="kpi">
-    <div class="label">BACnet Packets Captured</div>
+    <div class="label">Active Alarms / Triggers</div>
+    <div class="val" id="kpiAlarms">0</div>
+    <div class="sub" id="kpiPointsCount">0 / 12 production points synced</div>
+  </div>
+  <div class="kpi">
+    <div class="label">BACnet Wire Packets</div>
     <div class="val" id="kpiPackets">0</div>
     <div class="sub" id="kpiIamCov">I-Am: 0 • COV: 0</div>
   </div>
   <div class="kpi">
-    <div class="label">IMOPS Telemetry Sent</div>
+    <div class="label">IMOPS API Delivery</div>
     <div class="val" id="kpiReadings">0</div>
     <div class="sub" id="kpiBatches">Batches: 0 • Failed: 0</div>
-  </div>
-  <div class="kpi">
-    <div class="label">IMOPS Delivery Mode</div>
-    <div class="val" id="kpiImopsState" style="font-size:1.1rem">Initializing</div>
-    <div class="sub" id="kpiLastSync">Waiting for first batch...</div>
   </div>
 </section>
 
 <section class="main-grid">
   <div class="card">
     <div class="card-header">
-      <span id="visualTitle">Live Facility Telemetry Overlay</span>
-      <span class="mono" style="color:var(--muted)" id="pointCounter">0 points active</span>
+      <span id="visualTitle">Smart Nation Digital Twin — Live BACnet Telemetry</span>
+      <span class="mono" style="color:var(--muted)" id="ctrlBadge">Device 864077</span>
     </div>
-    <div class="twin-wrap" id="twinContainer">
-      <img id="facilityImg" src="/assets/dashboard.jpeg" alt="Facility Digital Twin" onerror="this.style.minHeight='320px';this.style.opacity='0.15'" />
+    <div class="twin-wrap">
+      <img id="facilityImg" src="/assets/dashboard.jpeg" alt="Digital Twin Facility" />
       <div id="hotspotsLayer">
-        <div class="hotspot" style="top:22%; left:47%;" id="hs-cooling">
-          <div class="hs-title">Dwyer RHPLC / RHL (P864)</div>
-          <div class="hs-val" id="val-cooling">-- °C / -- %RH</div>
+        <!-- Aligned directly with printed callout badges on dashboard.jpeg -->
+        <div class="pill" style="left:32.6%; top:68.5%;" id="pill-bw-int">
+          <div class="p-tag">AI-101/102 • AV-27126</div>
+          <div class="p-val" id="val-bw-int">-- °C | -- %RH (SP --)</div>
         </div>
-        <div class="hotspot" style="top:52%; left:52%;" id="hs-power">
-          <div class="hs-title">Schneider PM1200 (AXON)</div>
-          <div class="hs-val" id="val-power">-- kW • -- V</div>
+
+        <div class="pill" style="left:45.8%; top:44.2%;" id="pill-bw-th">
+          <div class="p-tag">AI-201 / AI-202</div>
+          <div class="p-val" id="val-bw-th">-- °C | -- %RH</div>
         </div>
-        <div class="hotspot" style="top:42%; left:68%;" id="hs-iaq">
-          <div class="hs-title">T18XAIR IAQ (P442)</div>
-          <div class="hs-val" id="val-iaq">CO₂: -- ppm</div>
+
+        <div class="pill ok" style="left:47.4%; top:70.5%;" id="pill-wd3">
+          <div class="p-tag">BI-1 • IN 1</div>
+          <div class="p-val" id="val-wd3">Waiting...</div>
         </div>
-        <div class="hotspot" style="top:64%; left:44%;" id="hs-leak">
-          <div class="hs-title">Dwyer WD3 Leak (P442)</div>
-          <div class="hs-val" id="val-leak">Waiting...</div>
+
+        <div class="pill ok" style="left:60.5%; top:16.5%;" id="pill-fire">
+          <div class="p-tag">BI-3 • IN 3 (Fire)</div>
+          <div class="p-val" id="val-fire">Waiting...</div>
         </div>
-        <div class="hotspot" style="top:67%; left:64%;" id="hs-occ">
-          <div class="hs-title">MSA237D Motion (P442)</div>
-          <div class="hs-val" id="val-occ">Waiting...</div>
+
+        <div class="pill ok" style="left:62.0%; top:40.2%;" id="pill-motion">
+          <div class="p-tag">BI-2 • IN 2</div>
+          <div class="p-val" id="val-motion">Waiting...</div>
         </div>
-        <div class="hotspot" style="top:34%; left:33%;" id="hs-air">
-          <div class="hs-title">Optergy Air (BG-1000-M)</div>
-          <div class="hs-val" id="val-air">-- °C (Wireless)</div>
+
+        <div class="pill ok" style="left:67.2%; top:50.8%;" id="pill-bg1000">
+          <div class="p-tag">P864 #864077</div>
+          <div class="p-val" id="val-bg1000">Scanning...</div>
+        </div>
+
+        <!-- Additional 4 Dry-Contact Production Points from Optergy BACnet Points.xlsx -->
+        <div class="pill ok" style="left:19.5%; top:53.5%;" id="pill-intrusion">
+          <div class="p-tag">BI-4 • Perimeter (MAXIBUS)</div>
+          <div class="p-val" id="val-intrusion">Waiting...</div>
+        </div>
+
+        <div class="pill ok" style="left:38.5%; top:50.5%;" id="pill-ups">
+          <div class="p-tag">BI-5 • UPS Monitoring</div>
+          <div class="p-val" id="val-ups">Waiting...</div>
+        </div>
+
+        <div class="pill ok" style="left:59.5%; top:75.0%;" id="pill-access">
+          <div class="p-tag">BI-6 • Access Control</div>
+          <div class="p-val" id="val-access">Waiting...</div>
+        </div>
+
+        <div class="pill ok" style="left:52.8%; top:55.5%;" id="pill-rack">
+          <div class="p-tag">BI-7 • Rack Door</div>
+          <div class="p-val" id="val-rack">Waiting...</div>
         </div>
       </div>
     </div>
@@ -249,21 +320,21 @@ const dashboardHTML = `<!DOCTYPE html>
 
   <div class="card">
     <div class="card-header">
-      <span>Discovered BACnet Points</span>
-      <span class="mono" style="color:var(--muted)">Present_Value</span>
+      <span>Production Points (Optergy BACnet Points.xlsx)</span>
+      <span class="mono" style="color:var(--muted)">Object / Value</span>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Controller / Equipment</th>
-            <th>Point</th>
+            <th>Object</th>
+            <th>Sensor & Property</th>
             <th>Value</th>
-            <th>State</th>
+            <th>Status</th>
           </tr>
         </thead>
         <tbody id="pointsTableBody">
-          <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:24px">Waiting for BACnet Who-Is / I-Am discovery...</td></tr>
+          <tr><td colspan="4" style="color:var(--muted);text-align:center;padding:24px">Waiting for Optergy P864 (864077) discovery...</td></tr>
         </tbody>
       </table>
     </div>
@@ -275,7 +346,7 @@ const dashboardHTML = `<!DOCTYPE html>
     <span>Recent BACnet/IP Wire Packets (UDP 0xBAC0)</span>
     <span class="mono" style="color:var(--muted)">BVLC + NPDU + APDU</span>
   </div>
-  <div class="table-wrap" style="max-height:220px">
+  <div class="table-wrap" style="max-height:200px">
     <table>
       <thead>
         <tr>
@@ -288,7 +359,7 @@ const dashboardHTML = `<!DOCTYPE html>
         </tr>
       </thead>
       <tbody id="packetsTableBody">
-        <tr><td colspan="6" style="color:var(--muted);text-align:center;padding:18px">Listening for BACnet packets...</td></tr>
+        <tr><td colspan="6" style="color:var(--muted);text-align:center;padding:16px">Listening for BACnet packets...</td></tr>
       </tbody>
     </table>
   </div>
@@ -296,6 +367,7 @@ const dashboardHTML = `<!DOCTYPE html>
 
 <script>
 let showingTopology = false;
+let lastSubnetSig = '';
 
 function toggleVisual() {
   showingTopology = !showingTopology;
@@ -306,14 +378,29 @@ function toggleVisual() {
   if (showingTopology) {
     img.src = '/assets/bacnet-devices.jpeg';
     hs.style.display = 'none';
-    btn.textContent = 'Show Facility Overlay';
-    title.textContent = 'Optergy Exhibition Wiring & Integration Topology';
+    btn.textContent = 'Show Digital Twin';
+    title.textContent = 'Optergy Wiring & Integration Reference';
   } else {
     img.src = '/assets/dashboard.jpeg';
     hs.style.display = 'block';
     btn.textContent = 'Show Wiring Diagram';
-    title.textContent = 'Live Facility Telemetry Overlay';
+    title.textContent = 'Smart Nation Digital Twin — Live BACnet Telemetry';
   }
+}
+
+async function onSelectSubnet(subnetVal) {
+  try {
+    const res = await fetch('/subnet', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subnet: subnetVal || '' })
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      alert('Failed to switch subnet: ' + (errData.error || res.statusText));
+    }
+    await refreshStatus();
+  } catch (e) { console.error(e); }
 }
 
 async function triggerDiscover() {
@@ -323,8 +410,19 @@ async function triggerDiscover() {
   } catch (e) { console.error(e); }
 }
 
-function findPoint(allPoints, matchFn) {
-  return allPoints.find(matchFn);
+function setBinaryPill(pillId, valId, pt, isCritical) {
+  if (!pt) return;
+  const pill = document.getElementById(pillId);
+  const valEl = document.getElementById(valId);
+  valEl.textContent = pt.last_value_text || String(pt.last_value ?? '--');
+  pill.classList.remove('ok', 'alarm', 'active-event');
+  if (pt.is_alarm || (isCritical && pt.last_value === 1)) {
+    pill.classList.add('alarm');
+  } else if (pt.is_triggered || pt.last_value === 1) {
+    pill.classList.add('active-event');
+  } else {
+    pill.classList.add('ok');
+  }
 }
 
 async function refreshStatus() {
@@ -334,98 +432,155 @@ async function refreshStatus() {
 
     document.getElementById('siteTitle').textContent = s.site_name + ' — ' + s.gateway_id;
     document.getElementById('listenInfo').textContent =
-      'Bound: ' + s.bacnet_listen_addr + ' • Broadcasts: ' + (s.broadcast_targets || []).join(', ');
+      'Bound: ' + s.bacnet_listen_addr + ' • Targets: ' + (s.broadcast_targets || []).join(', ');
 
-    document.getElementById('kpiDevices').textContent = s.device_count;
     document.getElementById('kpiSubnets').textContent =
-      (s.detected_subnets || []).map(n => n.interface_name + ' (' + n.cidr + ')').join(', ') || 'Custom broadcast override';
+      (s.detected_subnets || []).map(n => n.interface_name + ' (' + (n.network_cidr || n.cidr) + ')').join(', ') || 'Direct target override';
+
+    // Sync subnet selector dropdown without interrupting active user focus
+    const selEl = document.getElementById('subnetSelect');
+    const avail = s.available_subnets || [];
+    const sig = avail.map(n => n.interface_name + '|' + (n.network_cidr || n.cidr) + '|' + n.local_ip).join(';');
+    if (sig !== lastSubnetSig && document.activeElement !== selEl) {
+      lastSubnetSig = sig;
+      let optsHtml = '<option value="">Subnet: All Detected (Auto)</option>';
+      for (const n of avail) {
+        const cidr = n.network_cidr || n.cidr;
+        optsHtml += '<option value="' + escapeHtml(cidr) + '">' +
+          escapeHtml(n.interface_name + ' — ' + cidr + ' (' + n.local_ip + ')') + '</option>';
+      }
+      if (s.selected_subnet && !avail.some(n => (n.network_cidr || n.cidr) === s.selected_subnet)) {
+        optsHtml += '<option value="' + escapeHtml(s.selected_subnet) + '">Selected: ' + escapeHtml(s.selected_subnet) + '</option>';
+      }
+      selEl.innerHTML = optsHtml;
+    }
+    if (document.activeElement !== selEl) {
+      const activeMatch = avail.find(n =>
+        s.selected_subnet && (
+          (n.network_cidr || '').toLowerCase() === s.selected_subnet.toLowerCase() ||
+          (n.cidr || '').toLowerCase() === s.selected_subnet.toLowerCase() ||
+          (n.interface_name || '').toLowerCase() === s.selected_subnet.toLowerCase() ||
+          (n.local_ip || '') === s.selected_subnet
+        )
+      );
+      selEl.value = activeMatch ? (activeMatch.network_cidr || activeMatch.cidr) : (s.selected_subnet || '');
+    }
 
     document.getElementById('kpiPackets').textContent = s.packets_seen;
     document.getElementById('kpiIamCov').textContent = 'I-Am: ' + s.iam_received + ' • COV: ' + s.cov_received;
 
     const im = s.imops || {};
-    document.getElementById('kpiReadings').textContent = im.readings_sent || 0;
-    document.getElementById('kpiBatches').textContent =
-      'Batches: ' + (im.batches_sent || 0) + ' • Dry-run: ' + (im.dry_run_batches || 0) + ' • Failed: ' + (im.failed_requests || 0);
-
-    if ((im.dry_run_batches || 0) > 0 && (im.batches_sent || 0) === 0) {
-      document.getElementById('kpiImopsState').textContent = 'Dry-Run Mode';
-      document.getElementById('kpiLastSync').textContent = 'Set IMOPS_BASE_URL to enable live POST';
-    } else if (im.last_error) {
-      document.getElementById('kpiImopsState').textContent = 'Retry / Error';
-      document.getElementById('kpiLastSync').textContent = im.last_error;
+    if (im.enabled === false) {
+      document.getElementById('kpiReadings').textContent = 'DISABLED';
+      document.getElementById('kpiBatches').textContent = 'imops.enabled: false in config';
     } else {
-      document.getElementById('kpiImopsState').textContent = 'Live Connected';
-      document.getElementById('kpiLastSync').textContent = im.last_success_time ? ('Last OK: ' + im.last_success_time) : 'Ready';
+      document.getElementById('kpiReadings').textContent = im.readings_sent || 0;
+      const drySuffix = (im.dry_run_batches || 0) > 0 ? (' • Dry-run: ' + im.dry_run_batches) : '';
+      document.getElementById('kpiBatches').textContent =
+        'Batches: ' + (im.batches_sent || 0) + drySuffix + ' • Failed: ' + (im.failed_requests || 0);
     }
 
+    const byShort = {};
     const flat = [];
+    let p864Dev = null;
     for (const dev of (s.devices || [])) {
+      if (!p864Dev || dev.device_id === 864077 || (dev.model_name || '').includes('P864')) {
+        p864Dev = dev;
+      }
       for (const pt of (dev.points || [])) {
         flat.push({ dev, pt });
+        if (pt.short_id) {
+          byShort[pt.short_id] = pt;
+        }
       }
     }
-    document.getElementById('pointCounter').textContent = flat.length + ' points active';
 
-    // Update Digital Twin Hotspots
-    const kw = findPoint(flat, x => (x.pt.unit_symbol === 'kW'));
-    const volt = findPoint(flat, x => (x.pt.unit_symbol === 'V'));
-    if (kw || volt) {
-      document.getElementById('val-power').textContent =
-        (kw ? kw.pt.last_value_text : '-- kW') + ' • ' + (volt ? volt.pt.last_value_text : '-- V');
+    // Controller & BG-1000-M status
+    const devKpi = document.getElementById('kpiDevices');
+    const bgPill = document.getElementById('pill-bg1000');
+    const bgVal = document.getElementById('val-bg1000');
+    if (!p864Dev) {
+      devKpi.textContent = 'Searching...';
+      devKpi.classList.remove('alarm-text');
+      bgVal.textContent = 'Scanning UDP...';
+    } else if (!p864Dev.online) {
+      devKpi.textContent = 'COMM FAULT';
+      devKpi.classList.add('alarm-text');
+      bgPill.classList.remove('ok');
+      bgPill.classList.add('alarm');
+      bgVal.textContent = 'COMM FAILURE';
+      document.getElementById('ctrlBadge').textContent = 'P864 #' + p864Dev.device_id + ' (OFFLINE)';
+    } else {
+      devKpi.textContent = 'ONLINE (' + s.device_count + ')';
+      devKpi.classList.remove('alarm-text');
+      bgPill.classList.remove('alarm');
+      bgPill.classList.add('ok');
+      bgVal.textContent = 'Online • ' + p864Dev.address;
+      document.getElementById('ctrlBadge').textContent = p864Dev.object_name + ' (#' + p864Dev.device_id + ')';
     }
 
-    const rTemp = findPoint(flat, x => (x.pt.equipment_profile || '').includes('RHPLC') && x.pt.unit_symbol === '°C');
-    const rRH = findPoint(flat, x => (x.pt.equipment_profile || '').includes('RHPLC') && x.pt.unit_symbol === '%RH');
-    if (rTemp || rRH) {
-      document.getElementById('val-cooling').textContent =
-        (rTemp ? rTemp.pt.last_value_text : '--') + ' / ' + (rRH ? rRH.pt.last_value_text : '--');
+    // BW-INT-M (AI-101, AI-102, AV-27126)
+    const ai101 = byShort['AI-101'];
+    const ai102 = byShort['AI-102'];
+    const avsp  = byShort['AV-27126'];
+    if (ai101 || ai102 || avsp) {
+      document.getElementById('val-bw-int').textContent =
+        (ai101?.last_value_text || '--') + ' | ' +
+        (ai102?.last_value_text || '--') + ' (SP ' + (avsp?.last_value_text || '--') + ')';
     }
 
-    const co2 = findPoint(flat, x => x.pt.unit_symbol === 'ppm');
-    const pm25 = findPoint(flat, x => x.pt.unit_symbol === 'µg/m³');
-    if (co2 || pm25) {
-      document.getElementById('val-iaq').textContent =
-        (co2 ? ('CO₂ ' + co2.pt.last_value_text) : '') + (pm25 ? (' • PM2.5 ' + pm25.pt.last_value_text) : '');
+    // BW-TH-M (AI-201, AI-202)
+    const ai201 = byShort['AI-201'];
+    const ai202 = byShort['AI-202'];
+    if (ai201 || ai202) {
+      document.getElementById('val-bw-th').textContent =
+        (ai201?.last_value_text || '--') + ' | ' + (ai202?.last_value_text || '--');
     }
 
-    const leak = findPoint(flat, x => (x.pt.equipment_profile || '').includes('WD3') || x.pt.name.toUpperCase().includes('LEAK'));
-    if (leak) {
-      const hsLeak = document.getElementById('hs-leak');
-      document.getElementById('val-leak').textContent = leak.pt.last_value_text || String(leak.pt.last_value);
-      const isAlarm = leak.pt.last_status_flags?.in_alarm || leak.pt.last_value === 1;
-      hsLeak.classList.toggle('alarm', !!isAlarm);
-    }
+    // Binary Inputs BI-1 .. BI-7
+    setBinaryPill('pill-wd3',       'val-wd3',       byShort['BI-1'], true);
+    setBinaryPill('pill-motion',    'val-motion',    byShort['BI-2'], false);
+    setBinaryPill('pill-fire',      'val-fire',      byShort['BI-3'], true);
+    setBinaryPill('pill-intrusion', 'val-intrusion', byShort['BI-4'], true);
+    setBinaryPill('pill-ups',       'val-ups',       byShort['BI-5'], true);
+    setBinaryPill('pill-access',    'val-access',    byShort['BI-6'], true);
+    setBinaryPill('pill-rack',      'val-rack',      byShort['BI-7'], true);
 
-    const occ = findPoint(flat, x => (x.pt.equipment_profile || '').includes('MSA237') || x.pt.name.toUpperCase().includes('MOTION'));
-    if (occ) {
-      document.getElementById('val-occ').textContent = occ.pt.last_value_text || String(occ.pt.last_value);
+    // Count alarms
+    let alarmCnt = 0;
+    for (const { pt } of flat) {
+      if (pt.is_alarm) alarmCnt++;
     }
+    const alarmEl = document.getElementById('kpiAlarms');
+    alarmEl.textContent = alarmCnt;
+    alarmEl.classList.toggle('alarm-text', alarmCnt > 0);
+    document.getElementById('kpiPointsCount').textContent = flat.length + ' monitored points active';
 
-    const air = findPoint(flat, x => (x.pt.equipment_profile || '').includes('BW-INT') && x.pt.unit_symbol === '°C');
-    if (air) {
-      document.getElementById('val-air').textContent = air.pt.last_value_text + ' (Air Touch)';
-    }
-
-    // Points table
+    // Points Table
     const pBody = document.getElementById('pointsTableBody');
     if (flat.length > 0) {
       pBody.innerHTML = flat.map(({ dev, pt }) => {
-        const sf = pt.last_status_flags || {};
-        let badge = '<span class="badge good">GOOD</span>';
-        if (sf.in_alarm) badge = '<span class="badge alarm">ALARM</span>';
-        else if (sf.fault || sf.out_of_service) badge = '<span class="badge other">FAULT/OOS</span>';
-        const equip = pt.equipment_profile ? (' • ' + pt.equipment_profile) : '';
-        return '<tr>' +
-          '<td><strong>' + escapeHtml(dev.object_name) + '</strong><br><span style="color:var(--muted);font-size:0.72rem">' + escapeHtml(dev.address + equip) + '</span></td>' +
-          '<td class="mono">' + escapeHtml(pt.name) + '<br><span style="color:var(--muted);font-size:0.7rem">' + escapeHtml(pt.object_id.type + ':' + pt.object_id.instance) + '</span></td>' +
+        let badge = '<span class="badge good">NORMAL</span>';
+        let rowCls = '';
+        if (pt.is_alarm) {
+          badge = '<span class="badge alarm">ALARM</span>';
+          rowCls = ' class="row-alarm"';
+        } else if (pt.is_triggered) {
+          badge = '<span class="badge event">ACTIVE</span>';
+        }
+        const labelTitle = pt.dashboard_label || pt.equipment_profile || dev.object_name;
+        const subProp = pt.property_label || pt.name;
+        const inputInfo = pt.connection_bus ? (' • ' + pt.connection_bus) : '';
+        return '<tr' + rowCls + '>' +
+          '<td class="mono"><strong>' + escapeHtml(pt.short_id || (pt.object_id.type + ':' + pt.object_id.instance)) + '</strong></td>' +
+          '<td><strong>' + escapeHtml(labelTitle) + '</strong><br><span style="color:var(--muted);font-size:0.7rem">' + escapeHtml(subProp + inputInfo) + '</span></td>' +
           '<td><strong>' + escapeHtml(pt.last_value_text || '—') + '</strong></td>' +
           '<td>' + badge + '</td>' +
           '</tr>';
       }).join('');
     }
 
-    // Packets table
+    // Packets Table
     const pkts = (s.recent_packets || []).slice().reverse().slice(0, 25);
     const pktBody = document.getElementById('packetsTableBody');
     if (pkts.length > 0) {
@@ -455,9 +610,8 @@ function escapeHtml(str) {
 }
 
 refreshStatus();
-setInterval(refreshStatus, 2000);
+setInterval(refreshStatus, 1500);
 </script>
 </body>
 </html>
 `
-

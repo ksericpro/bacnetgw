@@ -21,8 +21,12 @@ import (
 
 // PointMeta stores cached static metadata and latest live reading for a BACnet object.
 type PointMeta struct {
+	CatalogOrder     int                `json:"catalog_order,omitempty"`
 	ObjectID         bacnet.ObjectID    `json:"object_id"`
+	ShortID          string             `json:"short_id"`
 	Name             string             `json:"name"`
+	PropertyLabel    string             `json:"property_label,omitempty"`
+	DashboardLabel   string             `json:"dashboard_label,omitempty"`
 	Description      string             `json:"description,omitempty"`
 	UnitID           *uint32            `json:"unit_id,omitempty"`
 	UnitSymbol       string             `json:"unit_symbol,omitempty"`
@@ -31,6 +35,10 @@ type PointMeta struct {
 	StateTexts       []string           `json:"state_texts,omitempty"`
 	EquipmentProfile string             `json:"equipment_profile,omitempty"`
 	ConnectionBus    string             `json:"connection_bus,omitempty"`
+	AlarmOnActive    bool               `json:"alarm_on_active"`
+	TriggerOnActive  bool               `json:"trigger_on_active"`
+	IsTriggered      bool               `json:"is_triggered"`
+	IsAlarm          bool               `json:"is_alarm"`
 	LastValue        any                `json:"last_value,omitempty"`
 	LastValueText    string             `json:"last_value_text,omitempty"`
 	LastStatusFlags  bacnet.StatusFlags `json:"last_status_flags"`
@@ -39,26 +47,28 @@ type PointMeta struct {
 
 // ManagedDevice tracks a discovered BACnet controller and its telemetry points.
 type ManagedDevice struct {
-	mu               sync.RWMutex
-	DeviceID         uint32
-	Address          bacnet.Address
-	MaxAPDULength    uint32
-	Segmentation     uint32
-	VendorID         uint32
-	ObjectName       string
-	ModelName        string
-	VendorName       string
-	FirmwareRevision string
-	Description      string
-	Location         string
-	ControllerRole   string
-	SupportsRPM      bool
-	DiscoveredAt     time.Time
-	LastSeenAt       time.Time
-	LastMetaSync     time.Time
-	LastCOVSync      time.Time
-	SyncInProgress   bool
-	Points           map[bacnet.ObjectID]*PointMeta
+	mu                  sync.RWMutex
+	DeviceID            uint32
+	Address             bacnet.Address
+	MaxAPDULength       uint32
+	Segmentation        uint32
+	VendorID            uint32
+	ObjectName          string
+	ModelName           string
+	VendorName          string
+	FirmwareRevision    string
+	Description         string
+	Location            string
+	ControllerRole      string
+	SupportsRPM         bool
+	Online              bool
+	ConsecutiveFailures int
+	DiscoveredAt        time.Time
+	LastSeenAt          time.Time
+	LastMetaSync        time.Time
+	LastCOVSync         time.Time
+	SyncInProgress      bool
+	Points              map[bacnet.ObjectID]*PointMeta
 }
 
 // Gateway coordinates subnet discovery, BACnet listener/polling, and IMOPS delivery.
@@ -69,6 +79,9 @@ type Gateway struct {
 	imopsCli   *imops.Client
 	httpServer *http.Server
 
+	netMu            sync.RWMutex
+	selectedSubnet   string
+	availableSubnets []bacnet.SubnetInfo
 	subnets          []bacnet.SubnetInfo
 	broadcastTargets []*net.UDPAddr
 
@@ -93,18 +106,26 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Gateway,
 		logger = slog.Default()
 	}
 
-	subnets, err := bacnet.DetectSubnets(cfg.Network.Interface, cfg.Network.BindIP)
+	allSubnets, err := bacnet.DetectSubnets("", cfg.Network.BindIP)
 	if err != nil {
 		logger.Warn("auto subnet detection returned warning", "err", err)
 	}
 
-	bcastTargets := buildBroadcastTargets(cfg.Network, subnets)
+	selector := normalizeSubnetSelector(cfg.Network.EffectiveSubnet())
+	subnets := bacnet.FilterSubnets(allSubnets, selector)
+	if selector != "" && len(subnets) == 0 && len(cfg.Network.BroadcastOverrides) == 0 {
+		return nil, formatMissingSubnetError(selector, allSubnets)
+	}
+
+	bcastTargets := buildBroadcastTargets(cfg.Network, selector, subnets)
 	imopsCli := imops.NewClient(cfg.GatewayID, cfg.SiteName, cfg.IMOPS, logger)
 
 	gw := &Gateway{
 		cfg:              cfg,
 		logger:           logger,
 		imopsCli:         imopsCli,
+		selectedSubnet:   selector,
+		availableSubnets: allSubnets,
 		subnets:          subnets,
 		broadcastTargets: bcastTargets,
 		devices:          make(map[uint32]*ManagedDevice),
@@ -136,7 +157,30 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Gateway,
 	return gw, nil
 }
 
-func buildBroadcastTargets(netCfg config.NetworkConfig, subnets []bacnet.SubnetInfo) []*net.UDPAddr {
+func normalizeSubnetSelector(s string) string {
+	sel := strings.TrimSpace(s)
+	if sel == "*" || strings.EqualFold(sel, "all") {
+		return ""
+	}
+	return sel
+}
+
+func formatMissingSubnetError(selector string, available []bacnet.SubnetInfo) error {
+	if len(available) == 0 {
+		return fmt.Errorf("selected subnet %q did not match any active non-loopback IPv4 interface", selector)
+	}
+	parts := make([]string, 0, len(available))
+	for _, sn := range available {
+		cidr := sn.NetworkCIDR
+		if cidr == "" {
+			cidr = sn.CIDR
+		}
+		parts = append(parts, fmt.Sprintf("%s (%s, IP %s)", sn.InterfaceName, cidr, sn.LocalIP.String()))
+	}
+	return fmt.Errorf("selected subnet %q did not match any active IPv4 interface; available: %s", selector, strings.Join(parts, ", "))
+}
+
+func buildBroadcastTargets(netCfg config.NetworkConfig, selector string, subnets []bacnet.SubnetInfo) []*net.UDPAddr {
 	port := netCfg.Port
 	if port <= 0 {
 		port = bacnet.DefaultPort
@@ -149,15 +193,31 @@ func buildBroadcastTargets(netCfg config.NetworkConfig, subnets []bacnet.SubnetI
 		}
 	}
 
+	prodControllerIP := net.ParseIP(ProductionP864IP)
 	for _, sn := range subnets {
 		targets = append(targets, &net.UDPAddr{
 			IP:   sn.BroadcastIP,
 			Port: port,
 		})
+		// If we are on the 192.168.0.0/24 production subnet, also send a direct unicast Who-Is to 192.168.0.160:47808
+		// so discovery still succeeds even if a managed switch suppresses subnet broadcast storms.
+		if prodControllerIP != nil {
+			cidrStr := sn.NetworkCIDR
+			if cidrStr == "" {
+				cidrStr = sn.CIDR
+			}
+			if _, cidrNet, err := net.ParseCIDR(cidrStr); err == nil && cidrNet.Contains(prodControllerIP) {
+				targets = append(targets, &net.UDPAddr{
+					IP:   prodControllerIP,
+					Port: bacnet.DefaultPort,
+				})
+			}
+		}
 	}
 
-	// Always include limited broadcast fallback unless explicit overrides were the only desired targets
-	if len(netCfg.BroadcastOverrides) == 0 {
+	// Only append global 255.255.255.255 broadcast when no explicit subnet selector or override is set;
+	// when a user selects a specific subnet, keep broadcasts strictly isolated to that subnet's directed broadcast IP.
+	if len(netCfg.BroadcastOverrides) == 0 && normalizeSubnetSelector(selector) == "" {
 		targets = append(targets, &net.UDPAddr{
 			IP:   net.IPv4bcast,
 			Port: port,
@@ -177,19 +237,27 @@ func parseTargetAddr(s string, defaultPort int) (*net.UDPAddr, error) {
 	return &net.UDPAddr{IP: ip, Port: defaultPort}, nil
 }
 
-// Start launches discovery, telemetry polling, and the optional status HTTP API.
+// Start launches discovery, telemetry polling, and the local web dashboard & status HTTP API.
 func (g *Gateway) Start(ctx context.Context) error {
-	for _, sn := range g.subnets {
-		g.logger.Info("detected local subnet for BACnet discovery",
+	g.netMu.RLock()
+	activeSubnets := append([]bacnet.SubnetInfo(nil), g.subnets...)
+	activeTargets := append([]*net.UDPAddr(nil), g.broadcastTargets...)
+	sel := g.selectedSubnet
+	g.netMu.RUnlock()
+
+	for _, sn := range activeSubnets {
+		g.logger.Info("active local subnet for BACnet discovery",
 			"interface", sn.InterfaceName,
 			"local_ip", sn.LocalIP.String(),
-			"cidr", sn.CIDR,
+			"network_cidr", sn.NetworkCIDR,
 			"directed_broadcast", sn.BroadcastIP.String(),
 		)
 	}
 	g.logger.Info("BACnet/IP listener bound",
 		"listen", g.bacnetCli.LocalAddr().String(),
-		"broadcast_targets", formatUDPTargets(g.broadcastTargets),
+		"selected_subnet", emptyAll(sel),
+		"only_catalog_points", g.cfg.Polling.OnlyCatalogPoints,
+		"broadcast_targets", formatUDPTargets(activeTargets),
 	)
 
 	if g.cfg.StatusAPI.Enabled && g.cfg.StatusAPI.ListenAddr != "" {
@@ -200,6 +268,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 		mux.HandleFunc("/healthz", g.handleHealthz)
 		mux.HandleFunc("/status", g.handleStatus)
 		mux.HandleFunc("/discover", g.handleTriggerDiscover)
+		mux.HandleFunc("/subnet", g.handleSelectSubnet)
 		g.httpServer = &http.Server{
 			Addr:              g.cfg.StatusAPI.ListenAddr,
 			Handler:           mux,
@@ -221,7 +290,6 @@ func (g *Gateway) Start(ctx context.Context) error {
 		}
 	}
 
-	// Trigger immediate Who-Is discovery on startup
 	g.TriggerDiscovery()
 
 	g.wg.Add(2)
@@ -231,6 +299,13 @@ func (g *Gateway) Start(ctx context.Context) error {
 	return nil
 }
 
+func emptyAll(sel string) string {
+	if strings.TrimSpace(sel) == "" {
+		return "all"
+	}
+	return sel
+}
+
 // LocalBACnetAddr returns the UDP address the BACnet listener bound to.
 func (g *Gateway) LocalBACnetAddr() *net.UDPAddr {
 	return g.bacnetCli.LocalAddr()
@@ -238,11 +313,71 @@ func (g *Gateway) LocalBACnetAddr() *net.UDPAddr {
 
 // TriggerDiscovery sends an active Who-Is broadcast across all target subnets.
 func (g *Gateway) TriggerDiscovery() {
-	if err := g.bacnetCli.SendWhoIs(g.broadcastTargets, nil, nil); err != nil {
+	g.netMu.RLock()
+	targets := append([]*net.UDPAddr(nil), g.broadcastTargets...)
+	g.netMu.RUnlock()
+
+	if err := g.bacnetCli.SendWhoIs(targets, nil, nil); err != nil {
 		g.logger.Warn("Who-Is broadcast failed", "err", err)
 	} else {
-		g.logger.Info("broadcasted BACnet Who-Is discovery", "targets", formatUDPTargets(g.broadcastTargets))
+		g.logger.Info("broadcasted BACnet Who-Is discovery", "targets", formatUDPTargets(targets))
 	}
+}
+
+// SelectSubnet dynamically switches the active local IPv4 subnet (or "" / "all" for all subnets)
+// and immediately broadcasts a fresh BACnet Who-Is on the chosen subnet.
+func (g *Gateway) SelectSubnet(selector string) error {
+	allSubnets, err := bacnet.DetectSubnets("", g.cfg.Network.BindIP)
+	if err != nil {
+		g.logger.Warn("subnet enumeration warning during SelectSubnet", "err", err)
+	}
+	norm := normalizeSubnetSelector(selector)
+	matched := bacnet.FilterSubnets(allSubnets, norm)
+	if norm != "" && len(matched) == 0 && len(g.cfg.Network.BroadcastOverrides) == 0 {
+		return formatMissingSubnetError(norm, allSubnets)
+	}
+
+	newTargets := buildBroadcastTargets(g.cfg.Network, norm, matched)
+
+	g.netMu.Lock()
+	g.selectedSubnet = norm
+	g.availableSubnets = allSubnets
+	g.subnets = matched
+	g.broadcastTargets = newTargets
+	g.netMu.Unlock()
+
+	// Prune cached devices outside the newly selected subnet so dashboard reflects only the chosen network
+	if norm != "" && len(matched) > 0 && len(g.cfg.Network.BroadcastOverrides) == 0 && g.cfg.Network.BBMDAddress == "" {
+		g.devMu.Lock()
+		for id, dev := range g.devices {
+			dev.mu.RLock()
+			ip := dev.Address.IP
+			dev.mu.RUnlock()
+			if !bacnet.SubnetContainsIP(matched, ip) {
+				delete(g.devices, id)
+			}
+		}
+		g.devMu.Unlock()
+	}
+
+	g.logger.Info("switched active BACnet subnet",
+		"selected_subnet", emptyAll(norm),
+		"broadcast_targets", formatUDPTargets(newTargets),
+	)
+	g.TriggerDiscovery()
+	return nil
+}
+
+func (g *Gateway) isSourceInSelectedSubnet(ip net.IP) bool {
+	g.netMu.RLock()
+	sel := g.selectedSubnet
+	active := g.subnets
+	g.netMu.RUnlock()
+
+	if sel == "" || len(active) == 0 || len(g.cfg.Network.BroadcastOverrides) > 0 || g.cfg.Network.BBMDAddress != "" {
+		return true
+	}
+	return bacnet.SubnetContainsIP(active, ip)
 }
 
 // Close gracefully stops the gateway, flushes IMOPS batches, and closes sockets.
@@ -327,6 +462,10 @@ func (g *Gateway) handlePacket(ev bacnet.PacketEvent) {
 
 func (g *Gateway) handleIAm(iam *bacnet.IAmNotification) {
 	g.iamSeen.Add(1)
+	if !g.isSourceInSelectedSubnet(iam.Source.IP) {
+		g.logger.Debug("ignoring I-Am outside selected subnet", "device_id", iam.DeviceID, "source", iam.Source.String())
+		return
+	}
 	if !g.isDeviceAllowed(iam.DeviceID) {
 		g.logger.Debug("ignoring I-Am from non-whitelisted device", "device_id", iam.DeviceID)
 		return
@@ -339,19 +478,21 @@ func (g *Gateway) handleIAm(iam *bacnet.IAmNotification) {
 	dev, exists := g.devices[iam.DeviceID]
 	if !exists {
 		dev = &ManagedDevice{
-			DeviceID:      iam.DeviceID,
-			Address:       iam.Source,
-			MaxAPDULength: iam.MaxAPDULength,
-			Segmentation:  iam.Segmentation,
-			VendorID:      iam.VendorID,
-			SupportsRPM:   true,
-			DiscoveredAt:  now,
-			LastSeenAt:    now,
-			Points:        make(map[bacnet.ObjectID]*PointMeta),
+			DeviceID:       iam.DeviceID,
+			Address:        iam.Source,
+			MaxAPDULength:  iam.MaxAPDULength,
+			Segmentation:   iam.Segmentation,
+			VendorID:       iam.VendorID,
+			SupportsRPM:    true,
+			Online:         true,
+			DiscoveredAt:   now,
+			LastSeenAt:     now,
+			SyncInProgress: true,
+			Points:         make(map[bacnet.ObjectID]*PointMeta),
 		}
 		g.devices[iam.DeviceID] = dev
 		shouldSync = true
-		g.logger.Info("auto-detected new BACnet device on subnet",
+		g.logger.Info("auto-detected BACnet device on subnet",
 			"device_id", iam.DeviceID,
 			"address", iam.Source.String(),
 			"vendor_id", iam.VendorID,
@@ -363,6 +504,8 @@ func (g *Gateway) handleIAm(iam *bacnet.IAmNotification) {
 		dev.MaxAPDULength = iam.MaxAPDULength
 		dev.Segmentation = iam.Segmentation
 		dev.VendorID = iam.VendorID
+		dev.Online = true
+		dev.ConsecutiveFailures = 0
 		dev.LastSeenAt = now
 		refreshDue := time.Since(dev.LastMetaSync) >= g.cfg.MetadataRefreshInterval()
 		if !dev.SyncInProgress && (dev.LastMetaSync.IsZero() || refreshDue) {
@@ -370,9 +513,6 @@ func (g *Gateway) handleIAm(iam *bacnet.IAmNotification) {
 			shouldSync = true
 		}
 		dev.mu.Unlock()
-	}
-	if exists == false {
-		dev.SyncInProgress = true
 	}
 	g.devMu.Unlock()
 
@@ -436,7 +576,6 @@ func (g *Gateway) syncDeviceMetadataAndInitialPoll(ctx context.Context, dev *Man
 			}
 		}
 	} else {
-		// Fallback to individual ReadProperty calls if controller rejects ReadPropertyMultiple
 		dev.mu.Lock()
 		dev.SupportsRPM = false
 		dev.mu.Unlock()
@@ -454,27 +593,60 @@ func (g *Gateway) syncDeviceMetadataAndInitialPoll(ctx context.Context, dev *Man
 	}
 	ctrlRole := ClassifyController(modelName, objName, vendorName, descr)
 
-	// 2. Enumerate Object_List
-	objList, err := g.bacnetCli.ReadObjectList(ctx, addr, devID)
-	if err != nil {
-		g.logger.Warn("failed to read Object_List from device",
-			"device_id", devID,
-			"name", objName,
-			"address", addr.String(),
-			"err", err,
-		)
-		return
-	}
-
+	// 2. Determine target BACnet objects to monitor
 	var telemetryObjs []bacnet.ObjectID
-	for _, oid := range objList {
-		if oid.Type.IsTelemetryObject() {
-			telemetryObjs = append(telemetryObjs, oid)
+	isProdP864 := IsProductionP864Controller(devID, modelName, objName)
+
+	if g.cfg.Polling.OnlyCatalogPoints {
+		if !isProdP864 {
+			g.logger.Info("skipping non-catalog BACnet device (set polling.only_catalog_points=false to monitor all devices)",
+				"device_id", devID,
+				"name", objName,
+				"model", modelName,
+			)
+			dev.mu.Lock()
+			dev.ObjectName = objName
+			dev.ModelName = modelName
+			dev.VendorName = vendorName
+			dev.ControllerRole = ctrlRole
+			dev.LastMetaSync = time.Now().UTC()
+			dev.mu.Unlock()
+			return
+		}
+
+		// Bind directly to the exact 12 production points defined in 'Optergy BACnet Points.xlsx'
+		seen := make(map[bacnet.ObjectID]bool)
+		for _, cp := range ProductionP864Points() {
+			telemetryObjs = append(telemetryObjs, cp.ObjectID)
+			seen[cp.ObjectID] = true
+		}
+		for _, extraRaw := range g.cfg.Polling.ExtraObjectIDs {
+			if oid, parseErr := bacnet.ParseShortObjectID(extraRaw); parseErr == nil && !seen[oid] {
+				telemetryObjs = append(telemetryObjs, oid)
+				seen[oid] = true
+			}
+		}
+	} else {
+		// Full dynamic Object_List enumeration
+		objList, listErr := g.bacnetCli.ReadObjectList(ctx, addr, devID)
+		if listErr != nil {
+			g.logger.Warn("failed to read Object_List from device",
+				"device_id", devID,
+				"name", objName,
+				"address", addr.String(),
+				"err", listErr,
+			)
+			return
+		}
+		for _, oid := range objList {
+			if oid.Type.IsTelemetryObject() {
+				telemetryObjs = append(telemetryObjs, oid)
+			}
 		}
 	}
 
-	// 3. Read point metadata (Object_Name, Description, Units / Active_Text / Inactive_Text / State_Text)
-	pointMap := g.fetchPointsMetadata(ctx, dev, addr, ctrlRole, telemetryObjs)
+	// 3. Enrich point metadata (combining live BACnet properties + Optergy BACnet Points.xlsx catalog defaults)
+	pointMap := g.fetchPointsMetadata(ctx, dev, addr, devID, modelName, objName, ctrlRole, telemetryObjs)
 
 	now := time.Now().UTC()
 	dev.mu.Lock()
@@ -485,11 +657,15 @@ func (g *Gateway) syncDeviceMetadataAndInitialPoll(ctx context.Context, dev *Man
 	dev.Description = descr
 	dev.Location = location
 	dev.ControllerRole = ctrlRole
+	dev.Online = true
+	dev.ConsecutiveFailures = 0
 	for oid, meta := range pointMap {
 		if existing, ok := dev.Points[oid]; ok {
 			meta.LastValue = existing.LastValue
 			meta.LastValueText = existing.LastValueText
 			meta.LastStatusFlags = existing.LastStatusFlags
+			meta.IsTriggered = existing.IsTriggered
+			meta.IsAlarm = existing.IsAlarm
 			meta.LastUpdated = existing.LastUpdated
 		}
 		dev.Points[oid] = meta
@@ -505,43 +681,55 @@ func (g *Gateway) syncDeviceMetadataAndInitialPoll(ctx context.Context, dev *Man
 		"name", objName,
 		"model", modelName,
 		"role", ctrlRole,
-		"telemetry_points", pointCount,
+		"monitored_points", pointCount,
 	)
 
 	// 4. Register discovered device in IMOPS
-	if err := g.imopsCli.SendDeviceRegistration(ctx, imops.DeviceRegistration{
-		DeviceID:         devID,
-		ObjectName:       objName,
-		ModelName:        modelName,
-		VendorName:       vendorName,
-		VendorID:         vendorID,
-		FirmwareRevision: fwRev,
-		Description:      descr,
-		Location:         location,
-		ControllerRole:   ctrlRole,
-		Address:          addr.String(),
-		PointCount:       pointCount,
-		DiscoveredAt:     discoveredAt,
-	}); err != nil {
-		g.logger.Warn("failed to register device with IMOPS", "device_id", devID, "err", err)
-	}
+	_ = g.imopsCli.SendDeviceRegistration(ctx, imops.DeviceRegistration{
+		DeviceID:            devID,
+		ObjectName:          objName,
+		ModelName:           modelName,
+		VendorName:          vendorName,
+		VendorID:            vendorID,
+		FirmwareRevision:    fwRev,
+		Description:         descr,
+		Location:            location,
+		ControllerRole:      ctrlRole,
+		Address:             addr.String(),
+		Online:              true,
+		CommunicationStatus: "online",
+		PointCount:          pointCount,
+		DiscoveredAt:        discoveredAt,
+	})
 
 	// 5. Subscribe to COV if configured
 	if g.cfg.Polling.SubscribeCOV {
 		g.renewDeviceCOVSubscriptions(ctx, dev)
 	}
 
-	// 6. Run immediate initial poll so IMOPS gets data right away
+	// 6. Run immediate initial poll so IMOPS and dashboard populate right away
 	g.pollSingleDevice(ctx, dev)
 }
 
-func (g *Gateway) fetchPointsMetadata(ctx context.Context, dev *ManagedDevice, addr bacnet.Address, ctrlRole string, objs []bacnet.ObjectID) map[bacnet.ObjectID]*PointMeta {
+func (g *Gateway) fetchPointsMetadata(
+	ctx context.Context,
+	dev *ManagedDevice,
+	addr bacnet.Address,
+	devID uint32,
+	modelName, devObjName, ctrlRole string,
+	objs []bacnet.ObjectID,
+) map[bacnet.ObjectID]*PointMeta {
 	out := make(map[bacnet.ObjectID]*PointMeta, len(objs))
 	for _, oid := range objs {
-		out[oid] = &PointMeta{
+		meta := &PointMeta{
 			ObjectID: oid,
-			Name:     oid.String(),
+			ShortID:  oid.ShortCode(),
+			Name:     oid.ShortCode(),
 		}
+		if cp, ok := LookupCatalogPoint(devID, modelName, devObjName, oid); ok {
+			applyCatalogDefaults(meta, cp)
+		}
+		out[oid] = meta
 	}
 
 	dev.mu.RLock()
@@ -605,25 +793,56 @@ func (g *Gateway) fetchPointsMetadata(ctx context.Context, dev *ManagedDevice, a
 			if name := g.readStringProp(ctx, addr, oid, bacnet.PropObjectName); name != "" {
 				meta.Name = name
 			}
-			meta.Description = g.readStringProp(ctx, addr, oid, bacnet.PropDescription)
+			if d := g.readStringProp(ctx, addr, oid, bacnet.PropDescription); d != "" {
+				meta.Description = d
+			}
 			if oid.Type.IsAnalogOrNumeric() {
 				if res, err := g.bacnetCli.ReadProperty(ctx, addr, oid, bacnet.PropUnits, nil); err == nil && len(res.Values) > 0 {
 					applyPointMetaProperty(meta, bacnet.PropUnits, res.Values)
 				}
 			} else if oid.Type.IsBinary() {
-				meta.InactiveText = g.readStringProp(ctx, addr, oid, bacnet.PropInactiveText)
-				meta.ActiveText = g.readStringProp(ctx, addr, oid, bacnet.PropActiveText)
+				if inact := g.readStringProp(ctx, addr, oid, bacnet.PropInactiveText); inact != "" {
+					meta.InactiveText = inact
+				}
+				if act := g.readStringProp(ctx, addr, oid, bacnet.PropActiveText); act != "" {
+					meta.ActiveText = act
+				}
 			}
 		}
 	}
 
 	for _, meta := range out {
-		eq, bus := ClassifyPoint(ctrlRole, meta.Name, meta.Description, meta.ObjectID, meta.UnitSymbol)
-		meta.EquipmentProfile = eq
-		meta.ConnectionBus = bus
+		if meta.EquipmentProfile == "" {
+			eq, bus := ClassifyPoint(devID, modelName, devObjName, ctrlRole, meta.Name, meta.Description, meta.ObjectID, meta.UnitSymbol)
+			meta.EquipmentProfile = eq
+			meta.ConnectionBus = bus
+		}
 	}
 
 	return out
+}
+
+func applyCatalogDefaults(meta *PointMeta, cp CatalogPoint) {
+	meta.CatalogOrder = cp.Order
+	meta.ShortID = cp.ShortID
+	meta.Name = fmt.Sprintf("%s - %s", cp.DashboardLabel, cp.PropertyLabel)
+	meta.PropertyLabel = cp.PropertyLabel
+	meta.DashboardLabel = cp.DashboardLabel
+	meta.EquipmentProfile = cp.SensorName
+	meta.ConnectionBus = cp.PhysicalInput
+	meta.AlarmOnActive = cp.AlarmOnActive
+	meta.TriggerOnActive = cp.TriggerOnActive
+	if cp.DefaultUnitID != 0 {
+		u := cp.DefaultUnitID
+		meta.UnitID = &u
+		meta.UnitSymbol = bacnet.EngineeringUnitSymbol(u)
+	}
+	if cp.DefaultInactive != "" {
+		meta.InactiveText = cp.DefaultInactive
+	}
+	if cp.DefaultActive != "" {
+		meta.ActiveText = cp.DefaultActive
+	}
 }
 
 func applyPointMetaProperty(meta *PointMeta, prop bacnet.PropertyID, vals []any) {
@@ -632,30 +851,34 @@ func applyPointMetaProperty(meta *PointMeta, prop bacnet.PropertyID, vals []any)
 	}
 	switch prop {
 	case bacnet.PropObjectName:
-		if s, ok := vals[0].(string); ok && s != "" {
+		if s, ok := vals[0].(string); ok && strings.TrimSpace(s) != "" {
 			meta.Name = s
 		}
 	case bacnet.PropDescription:
-		if s, ok := vals[0].(string); ok {
+		if s, ok := vals[0].(string); ok && strings.TrimSpace(s) != "" {
 			meta.Description = s
 		}
 	case bacnet.PropUnits:
-		switch u := vals[0].(type) {
+		var u uint32
+		var valid bool
+		switch raw := vals[0].(type) {
 		case uint32:
+			u, valid = raw, true
+		case uint64:
+			u, valid = uint32(raw), true
+		}
+		// Only override catalog default unit if controller reports a real engineering unit (not 95 = no-units)
+		if valid && (u != 95 || meta.UnitID == nil) {
 			uCopy := u
 			meta.UnitID = &uCopy
 			meta.UnitSymbol = bacnet.EngineeringUnitSymbol(u)
-		case uint64:
-			uCopy := uint32(u)
-			meta.UnitID = &uCopy
-			meta.UnitSymbol = bacnet.EngineeringUnitSymbol(uCopy)
 		}
 	case bacnet.PropInactiveText:
-		if s, ok := vals[0].(string); ok {
+		if s, ok := vals[0].(string); ok && strings.TrimSpace(s) != "" {
 			meta.InactiveText = s
 		}
 	case bacnet.PropActiveText:
-		if s, ok := vals[0].(string); ok {
+		if s, ok := vals[0].(string); ok && strings.TrimSpace(s) != "" {
 			meta.ActiveText = s
 		}
 	case bacnet.PropStateText:
@@ -665,7 +888,9 @@ func applyPointMetaProperty(meta *PointMeta, prop bacnet.PropertyID, vals []any)
 				states = append(states, s)
 			}
 		}
-		meta.StateTexts = states
+		if len(states) > 0 {
+			meta.StateTexts = states
+		}
 	}
 }
 
@@ -696,7 +921,6 @@ func (g *Gateway) renewDeviceCOVSubscriptions(ctx context.Context, dev *ManagedD
 	dev.mu.RUnlock()
 
 	for _, oid := range objs {
-		// Ignore errors gently because some BACnet object types (or Modbus virtual points) don't support SubscribeCOV
 		_ = g.bacnetCli.SubscribeCOV(ctx, addr, 1, oid, lifetime)
 	}
 
@@ -814,7 +1038,6 @@ func (g *Gateway) pollSingleDevice(ctx context.Context, dev *ManagedDevice) {
 		}
 	}
 
-	// Individual ReadProperty fallback for any unread objects when RPM is unsupported
 	if !supportsRPM {
 		for _, oid := range objs {
 			if _, already := collected[oid]; already {
@@ -838,35 +1061,92 @@ func (g *Gateway) pollSingleDevice(ctx context.Context, dev *ManagedDevice) {
 		}
 	}
 
+	// Handle communication loss / recovery (Checklist Row 11: COMMUNICATION FAILURE)
 	if len(collected) == 0 {
+		var notifyCommLoss bool
+		var reg imops.DeviceRegistration
+		dev.mu.Lock()
+		dev.ConsecutiveFailures++
+		if dev.Online && dev.ConsecutiveFailures >= 2 {
+			dev.Online = false
+			notifyCommLoss = true
+			reg = buildDeviceRegistration(dev, false, "communication_failure")
+		}
+		dev.mu.Unlock()
+		if notifyCommLoss {
+			g.logger.Error("BACnet controller communication failure detected",
+				"device_id", reg.DeviceID,
+				"name", reg.ObjectName,
+				"address", reg.Address,
+			)
+			_ = g.imopsCli.SendDeviceRegistration(ctx, reg)
+		}
 		return
 	}
 
 	now := time.Now().UTC()
 	var readings []imops.TelemetryReading
+	var notifyCommRestored bool
+	var restoredReg imops.DeviceRegistration
 
 	dev.mu.Lock()
+	if !dev.Online {
+		dev.Online = true
+		notifyCommRestored = true
+		restoredReg = buildDeviceRegistration(dev, true, "online")
+	}
+	dev.ConsecutiveFailures = 0
 	dev.LastSeenAt = now
+
 	for oid, item := range collected {
 		meta, exists := dev.Points[oid]
 		if !exists {
 			continue
 		}
-		normVal, valText := formatPointValue(meta, item.val)
+		normVal, valText, isTrig, isAlarm := evaluatePointValue(meta, item.val, item.flags)
 		meta.LastValue = normVal
 		meta.LastValueText = valText
 		meta.LastStatusFlags = item.flags
+		meta.IsTriggered = isTrig
+		meta.IsAlarm = isAlarm
 		meta.LastUpdated = now
 
-		readings = append(readings, buildTelemetryReading(dev, meta, normVal, valText, item.flags, "poll", now))
+		readings = append(readings, buildTelemetryReading(dev, meta, normVal, valText, item.flags, isTrig, isAlarm, "poll", now))
 	}
 	dev.mu.Unlock()
+
+	if notifyCommRestored {
+		g.logger.Info("BACnet controller communication restored", "device_id", restoredReg.DeviceID, "name", restoredReg.ObjectName)
+		_ = g.imopsCli.SendDeviceRegistration(ctx, restoredReg)
+	}
 
 	g.imopsCli.EnqueueTelemetry(readings...)
 }
 
+func buildDeviceRegistration(dev *ManagedDevice, online bool, commStatus string) imops.DeviceRegistration {
+	return imops.DeviceRegistration{
+		DeviceID:            dev.DeviceID,
+		ObjectName:          dev.ObjectName,
+		ModelName:           dev.ModelName,
+		VendorName:          dev.VendorName,
+		VendorID:            dev.VendorID,
+		FirmwareRevision:    dev.FirmwareRevision,
+		Description:         dev.Description,
+		Location:            dev.Location,
+		ControllerRole:      dev.ControllerRole,
+		Address:             dev.Address.String(),
+		Online:              online,
+		CommunicationStatus: commStatus,
+		PointCount:          len(dev.Points),
+		DiscoveredAt:        dev.DiscoveredAt,
+	}
+}
+
 func (g *Gateway) handleCOV(cov *bacnet.COVNotification) {
 	g.covSeen.Add(1)
+	if !g.isSourceInSelectedSubnet(cov.Source.IP) {
+		return
+	}
 	if !g.isDeviceAllowed(cov.InitiatingDeviceID) {
 		return
 	}
@@ -895,47 +1175,86 @@ func (g *Gateway) handleCOV(cov *bacnet.COVNotification) {
 
 	now := time.Now().UTC()
 	if !exists {
-		// Trigger discovery for unknown COV sender and still forward reading
 		_ = g.bacnetCli.SendWhoIs([]*net.UDPAddr{cov.Source.UDPAddr()}, &cov.InitiatingDeviceID, &cov.InitiatingDeviceID)
+		meta := &PointMeta{
+			ObjectID: cov.MonitoredObject,
+			ShortID:  cov.MonitoredObject.ShortCode(),
+			Name:     cov.MonitoredObject.ShortCode(),
+		}
+		if cp, ok := LookupCatalogPoint(cov.InitiatingDeviceID, "", "", cov.MonitoredObject); ok {
+			applyCatalogDefaults(meta, cp)
+		}
+		normVal, valText, isTrig, isAlarm := evaluatePointValue(meta, pv, sf)
 		g.imopsCli.EnqueueTelemetry(imops.TelemetryReading{
-			Timestamp:      now,
-			SourceType:     "cov",
-			DeviceID:       cov.InitiatingDeviceID,
-			DeviceName:     fmt.Sprintf("Device-%d", cov.InitiatingDeviceID),
-			DeviceAddress:  cov.Source.String(),
-			ObjectType:     cov.MonitoredObject.Type.String(),
-			ObjectInstance: cov.MonitoredObject.Instance,
-			ObjectID:       cov.MonitoredObject.String(),
-			PointName:      cov.MonitoredObject.String(),
-			Value:          pv,
-			Quality:        deriveQuality(sf),
-			StatusFlags:    sf,
+			Timestamp:        now,
+			SourceType:       "cov",
+			DeviceID:         cov.InitiatingDeviceID,
+			DeviceName:       fmt.Sprintf("Device-%d", cov.InitiatingDeviceID),
+			DeviceAddress:    cov.Source.String(),
+			ObjectType:       cov.MonitoredObject.Type.String(),
+			ObjectInstance:   cov.MonitoredObject.Instance,
+			ObjectID:         cov.MonitoredObject.String(),
+			ShortObjectID:    meta.ShortID,
+			PointName:        meta.Name,
+			PropertyLabel:    meta.PropertyLabel,
+			DashboardLabel:   meta.DashboardLabel,
+			EquipmentProfile: meta.EquipmentProfile,
+			ConnectionBus:    meta.ConnectionBus,
+			Value:            normVal,
+			ValueText:        valText,
+			IsTriggered:      isTrig,
+			IsAlarm:          isAlarm,
+			Quality:          deriveQuality(sf, isAlarm),
+			StatusFlags:      sf,
 		})
 		return
 	}
 
 	dev.mu.Lock()
+	dev.Online = true
+	dev.ConsecutiveFailures = 0
 	dev.LastSeenAt = now
 	meta, ok := dev.Points[cov.MonitoredObject]
 	if !ok {
+		if g.cfg.Polling.OnlyCatalogPoints {
+			if _, inCat := LookupCatalogPoint(dev.DeviceID, dev.ModelName, dev.ObjectName, cov.MonitoredObject); !inCat {
+				dev.mu.Unlock()
+				return
+			}
+		}
 		meta = &PointMeta{
 			ObjectID: cov.MonitoredObject,
-			Name:     cov.MonitoredObject.String(),
+			ShortID:  cov.MonitoredObject.ShortCode(),
+			Name:     cov.MonitoredObject.ShortCode(),
+		}
+		if cp, inCat := LookupCatalogPoint(dev.DeviceID, dev.ModelName, dev.ObjectName, cov.MonitoredObject); inCat {
+			applyCatalogDefaults(meta, cp)
 		}
 		dev.Points[cov.MonitoredObject] = meta
 	}
-	normVal, valText := formatPointValue(meta, pv)
+	normVal, valText, isTrig, isAlarm := evaluatePointValue(meta, pv, sf)
 	meta.LastValue = normVal
 	meta.LastValueText = valText
 	meta.LastStatusFlags = sf
+	meta.IsTriggered = isTrig
+	meta.IsAlarm = isAlarm
 	meta.LastUpdated = now
-	reading := buildTelemetryReading(dev, meta, normVal, valText, sf, "cov", now)
+	reading := buildTelemetryReading(dev, meta, normVal, valText, sf, isTrig, isAlarm, "cov", now)
 	dev.mu.Unlock()
 
 	g.imopsCli.EnqueueTelemetry(reading)
 }
 
-func buildTelemetryReading(dev *ManagedDevice, meta *PointMeta, normVal any, valText string, sf bacnet.StatusFlags, sourceType string, ts time.Time) imops.TelemetryReading {
+func buildTelemetryReading(
+	dev *ManagedDevice,
+	meta *PointMeta,
+	normVal any,
+	valText string,
+	sf bacnet.StatusFlags,
+	isTrig, isAlarm bool,
+	sourceType string,
+	ts time.Time,
+) imops.TelemetryReading {
 	return imops.TelemetryReading{
 		Timestamp:        ts,
 		SourceType:       sourceType,
@@ -946,7 +1265,10 @@ func buildTelemetryReading(dev *ManagedDevice, meta *PointMeta, normVal any, val
 		ObjectType:       meta.ObjectID.Type.String(),
 		ObjectInstance:   meta.ObjectID.Instance,
 		ObjectID:         meta.ObjectID.String(),
+		ShortObjectID:    meta.ShortID,
 		PointName:        meta.Name,
+		PropertyLabel:    meta.PropertyLabel,
+		DashboardLabel:   meta.DashboardLabel,
 		Description:      meta.Description,
 		EquipmentProfile: meta.EquipmentProfile,
 		ConnectionBus:    meta.ConnectionBus,
@@ -954,12 +1276,14 @@ func buildTelemetryReading(dev *ManagedDevice, meta *PointMeta, normVal any, val
 		ValueText:        valText,
 		Unit:             meta.UnitSymbol,
 		UnitID:           meta.UnitID,
-		Quality:          deriveQuality(sf),
+		IsTriggered:      isTrig,
+		IsAlarm:          isAlarm,
+		Quality:          deriveQuality(sf, isAlarm),
 		StatusFlags:      sf,
 	}
 }
 
-func formatPointValue(meta *PointMeta, raw any) (any, string) {
+func evaluatePointValue(meta *PointMeta, raw any, sf bacnet.StatusFlags) (normVal any, valText string, isTriggered bool, isAlarm bool) {
 	if meta.ObjectID.Type.IsBinary() {
 		var active bool
 		switch v := raw.(type) {
@@ -967,54 +1291,60 @@ func formatPointValue(meta *PointMeta, raw any) (any, string) {
 			active = v != 0
 		case uint64:
 			active = v != 0
+		case float64:
+			active = v != 0
+		case float32:
+			active = v != 0
 		case bool:
 			active = v
 		}
+		isTriggered = active && meta.TriggerOnActive
+		isAlarm = sf.InAlarm || (active && meta.AlarmOnActive)
 		if active {
 			if meta.ActiveText != "" {
-				return 1, meta.ActiveText
+				return 1, meta.ActiveText, isTriggered, isAlarm
 			}
-			return 1, "Active"
+			return 1, "Active", isTriggered, isAlarm
 		}
 		if meta.InactiveText != "" {
-			return 0, meta.InactiveText
+			return 0, meta.InactiveText, false, sf.InAlarm
 		}
-		return 0, "Inactive"
+		return 0, "Inactive", false, sf.InAlarm
 	}
 
+	isAlarm = sf.InAlarm
 	switch v := raw.(type) {
 	case float64:
-		// Round float32->float64 artifacts cleanly to 4 decimal places
-		rounded, _ := strconv.ParseFloat(strconv.FormatFloat(v, 'f', 4, 64), 64)
+		rounded, _ := strconv.ParseFloat(strconv.FormatFloat(v, 'f', 2, 64), 64)
 		if meta.UnitSymbol != "" {
-			return rounded, fmt.Sprintf("%g %s", rounded, meta.UnitSymbol)
+			return rounded, fmt.Sprintf("%g %s", rounded, meta.UnitSymbol), sf.InAlarm, isAlarm
 		}
-		return rounded, fmt.Sprintf("%g", rounded)
+		return rounded, fmt.Sprintf("%g", rounded), sf.InAlarm, isAlarm
 	case uint32:
 		if len(meta.StateTexts) > 0 && int(v) >= 1 && int(v) <= len(meta.StateTexts) {
-			return v, meta.StateTexts[v-1]
+			return v, meta.StateTexts[v-1], sf.InAlarm, isAlarm
 		}
-		return v, fmt.Sprintf("%d", v)
+		return v, fmt.Sprintf("%d", v), sf.InAlarm, isAlarm
 	case uint64:
 		if len(meta.StateTexts) > 0 && int(v) >= 1 && int(v) <= len(meta.StateTexts) {
-			return v, meta.StateTexts[v-1]
+			return v, meta.StateTexts[v-1], sf.InAlarm, isAlarm
 		}
 		if meta.UnitSymbol != "" {
-			return v, fmt.Sprintf("%d %s", v, meta.UnitSymbol)
+			return v, fmt.Sprintf("%d %s", v, meta.UnitSymbol), sf.InAlarm, isAlarm
 		}
-		return v, fmt.Sprintf("%d", v)
+		return v, fmt.Sprintf("%d", v), sf.InAlarm, isAlarm
 	default:
-		return raw, fmt.Sprintf("%v", raw)
+		return raw, fmt.Sprintf("%v", raw), sf.InAlarm, isAlarm
 	}
 }
 
-func deriveQuality(sf bacnet.StatusFlags) string {
+func deriveQuality(sf bacnet.StatusFlags, isAlarm bool) string {
 	switch {
 	case sf.Fault:
 		return "fault"
 	case sf.OutOfService:
 		return "out_of_service"
-	case sf.InAlarm:
+	case isAlarm || sf.InAlarm:
 		return "alarm"
 	case sf.Overridden:
 		return "overridden"
@@ -1035,36 +1365,47 @@ func formatUDPTargets(targets []*net.UDPAddr) []string {
 
 // DeviceSummary represents a discovered controller in the /status response.
 type DeviceSummary struct {
-	DeviceID         uint32       `json:"device_id"`
-	ObjectName       string       `json:"object_name"`
-	ModelName        string       `json:"model_name"`
-	VendorName       string       `json:"vendor_name"`
-	ControllerRole   string       `json:"controller_role"`
-	Address          string       `json:"address"`
-	DiscoveredAt     time.Time    `json:"discovered_at"`
-	LastSeenAt       time.Time    `json:"last_seen_at"`
-	Points           []*PointMeta `json:"points"`
+	DeviceID       uint32       `json:"device_id"`
+	ObjectName     string       `json:"object_name"`
+	ModelName      string       `json:"model_name"`
+	VendorName     string       `json:"vendor_name"`
+	ControllerRole string       `json:"controller_role"`
+	Address        string       `json:"address"`
+	Online         bool         `json:"online"`
+	DiscoveredAt   time.Time    `json:"discovered_at"`
+	LastSeenAt     time.Time    `json:"last_seen_at"`
+	Points         []*PointMeta `json:"points"`
 }
 
-// StatusSnapshot is returned by GET /status (and usable directly in tests).
+// StatusSnapshot is returned by GET /status.
 type StatusSnapshot struct {
-	GatewayID        string                `json:"gateway_id"`
-	SiteName         string                `json:"site_name"`
-	UptimeSeconds    int64                 `json:"uptime_seconds"`
-	BACnetListenAddr string                `json:"bacnet_listen_addr"`
-	DetectedSubnets  []bacnet.SubnetInfo   `json:"detected_subnets"`
-	BroadcastTargets []string              `json:"broadcast_targets"`
-	PacketsSeen      uint64                `json:"packets_seen"`
-	IAmReceived      uint64                `json:"iam_received"`
-	COVReceived      uint64                `json:"cov_received"`
-	DeviceCount      int                   `json:"device_count"`
-	Devices          []DeviceSummary       `json:"devices"`
-	IMOPS            imops.Stats           `json:"imops"`
-	RecentPackets    []bacnet.PacketEvent  `json:"recent_packets"`
+	GatewayID         string               `json:"gateway_id"`
+	SiteName          string               `json:"site_name"`
+	UptimeSeconds     int64                `json:"uptime_seconds"`
+	BACnetListenAddr  string               `json:"bacnet_listen_addr"`
+	OnlyCatalogPoints bool                 `json:"only_catalog_points"`
+	SelectedSubnet    string               `json:"selected_subnet"`
+	AvailableSubnets  []bacnet.SubnetInfo  `json:"available_subnets"`
+	DetectedSubnets   []bacnet.SubnetInfo  `json:"detected_subnets"`
+	BroadcastTargets  []string             `json:"broadcast_targets"`
+	PacketsSeen       uint64               `json:"packets_seen"`
+	IAmReceived       uint64               `json:"iam_received"`
+	COVReceived       uint64               `json:"cov_received"`
+	DeviceCount       int                  `json:"device_count"`
+	Devices           []DeviceSummary      `json:"devices"`
+	IMOPS             imops.Stats          `json:"imops"`
+	RecentPackets     []bacnet.PacketEvent `json:"recent_packets"`
 }
 
 // Snapshot returns the current operational state of the gateway.
 func (g *Gateway) Snapshot() StatusSnapshot {
+	g.netMu.RLock()
+	selSubnet := g.selectedSubnet
+	availSubnets := append([]bacnet.SubnetInfo(nil), g.availableSubnets...)
+	activeSubnets := append([]bacnet.SubnetInfo(nil), g.subnets...)
+	activeTargets := append([]*net.UDPAddr(nil), g.broadcastTargets...)
+	g.netMu.RUnlock()
+
 	g.devMu.RLock()
 	devs := make([]DeviceSummary, 0, len(g.devices))
 	for _, d := range g.devices {
@@ -1075,6 +1416,15 @@ func (g *Gateway) Snapshot() StatusSnapshot {
 			pts = append(pts, &cp)
 		}
 		sort.Slice(pts, func(i, j int) bool {
+			if pts[i].CatalogOrder != pts[j].CatalogOrder {
+				if pts[i].CatalogOrder == 0 {
+					return false
+				}
+				if pts[j].CatalogOrder == 0 {
+					return true
+				}
+				return pts[i].CatalogOrder < pts[j].CatalogOrder
+			}
 			if pts[i].ObjectID.Type != pts[j].ObjectID.Type {
 				return pts[i].ObjectID.Type < pts[j].ObjectID.Type
 			}
@@ -1087,6 +1437,7 @@ func (g *Gateway) Snapshot() StatusSnapshot {
 			VendorName:     d.VendorName,
 			ControllerRole: d.ControllerRole,
 			Address:        d.Address.String(),
+			Online:         d.Online,
 			DiscoveredAt:   d.DiscoveredAt,
 			LastSeenAt:     d.LastSeenAt,
 			Points:         pts,
@@ -1105,19 +1456,22 @@ func (g *Gateway) Snapshot() StatusSnapshot {
 	g.pktMu.Unlock()
 
 	return StatusSnapshot{
-		GatewayID:        g.cfg.GatewayID,
-		SiteName:         g.cfg.SiteName,
-		UptimeSeconds:    int64(time.Since(g.startedAt).Seconds()),
-		BACnetListenAddr: g.bacnetCli.LocalAddr().String(),
-		DetectedSubnets:  g.subnets,
-		BroadcastTargets: formatUDPTargets(g.broadcastTargets),
-		PacketsSeen:      g.packetsSeen.Load(),
-		IAmReceived:      g.iamSeen.Load(),
-		COVReceived:      g.covSeen.Load(),
-		DeviceCount:      len(devs),
-		Devices:          devs,
-		IMOPS:            g.imopsCli.SnapshotStats(),
-		RecentPackets:    pkts,
+		GatewayID:         g.cfg.GatewayID,
+		SiteName:          g.cfg.SiteName,
+		UptimeSeconds:     int64(time.Since(g.startedAt).Seconds()),
+		BACnetListenAddr:  g.bacnetCli.LocalAddr().String(),
+		OnlyCatalogPoints: g.cfg.Polling.OnlyCatalogPoints,
+		SelectedSubnet:    selSubnet,
+		AvailableSubnets:  availSubnets,
+		DetectedSubnets:   activeSubnets,
+		BroadcastTargets:  formatUDPTargets(activeTargets),
+		PacketsSeen:       g.packetsSeen.Load(),
+		IAmReceived:       g.iamSeen.Load(),
+		COVReceived:       g.covSeen.Load(),
+		DeviceCount:       len(devs),
+		Devices:           devs,
+		IMOPS:             g.imopsCli.SnapshotStats(),
+		RecentPackets:     pkts,
 	}
 }
 
@@ -1147,3 +1501,35 @@ func (g *Gateway) handleTriggerDiscover(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "discovery_triggered"})
 }
 
+func (g *Gateway) handleSelectSubnet(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "use POST /subnet", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Subnet string `json:"subnet"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+	}
+	if payload.Subnet == "" && r.URL.Query().Has("subnet") {
+		payload.Subnet = r.URL.Query().Get("subnet")
+	}
+	if err := g.SelectSubnet(payload.Subnet); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status": "error",
+			"error":  err.Error(),
+		})
+		return
+	}
+	snap := g.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":            "subnet_selected",
+		"selected_subnet":   snap.SelectedSubnet,
+		"detected_subnets":  snap.DetectedSubnets,
+		"broadcast_targets": snap.BroadcastTargets,
+	})
+}
