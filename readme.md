@@ -131,7 +131,16 @@ Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-3&val=0"
 
 ---
 
-### Option 2: Start on the Production `192.168.0.0/24` Subnet (Site / VAST PC)
+### Option 2: Windows Production Server Deployment (`192.168.0.0/24` Subnet / VAST PC)
+
+#### Step 0 — Build & Copy the Windows Bundle (`dist\windows-amd64` or `.zip`)
+
+On your build PC, run `.\build.bat windows-amd64` (or `.\build.bat`). Then copy **only** the Windows bundle (not the entire multi-OS `dist` folder) to your Windows production server (e.g. `C:\bacnet-gw\`):
+
+- **Folder:** `dist\windows-amd64\`
+- **Or Single Zip:** `dist\bacnet-gw-windows-amd64.zip`
+
+Inside that folder you already have everything needed: `bacnet-gw.exe`, `config.example.yaml`, `.env.example`, `dashboard.jpeg`, `bacnet devices.jpeg`, and `install-windows.ps1`.
 
 #### Step 1 — Allow BACnet UDP Port `47808` in Windows Firewall (Run PowerShell as Administrator once)
 
@@ -194,9 +203,15 @@ Configure `config.yaml` (or `.env`):
 
 _(Once running, you can also switch the active subnet live at any time using the **Subnet dropdown** in the top-right header of `http://127.0.0.1:8090/`.)_
 
-#### Step 5 (Optional) — Register as a Windows Boot Auto-Start Task
+#### Step 5 (Optional) — Register as an Auto-Restarting Windows Background Startup Task
 
-Run PowerShell as Administrator so `bacnet-gw.exe` starts automatically on system boot:
+Run the included installer in PowerShell as Administrator (sets up the UDP `47808` Firewall rule, creates `config.yaml` if missing, and registers + starts the `ZAARR-BACnet-GW` boot task with automatic restart on failure):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-windows.ps1
+```
+
+_(Or manually in PowerShell as Administrator:)_
 
 ```powershell
 $workDir = (Get-Location).Path
@@ -380,6 +395,7 @@ bacnet gw/
 │   ├── bacnet-gw/main.go          # Production gateway CLI entrypoint
 │   └── mock-exhibition/main.go    # Local P864 (#864077) BACnet simulator & mock IMOPS server
 ├── deploy/
+│   ├── install-windows.ps1        # Automated Windows Firewall + Startup Scheduled Task installer
 │   ├── build-linux-amd64.ps1      # Cross-compiles static Ubuntu 64-bit (linux/amd64) bundle & tar.gz
 │   ├── bacnet-gw.service          # Production systemd unit file (/etc/systemd/system/bacnet-gw.service)
 │   └── install-ubuntu.sh          # Automated Ubuntu systemd service & UFW installer

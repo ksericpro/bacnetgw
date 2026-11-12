@@ -188,20 +188,35 @@ exit /b 0
 :build_windows
 set "W_ARCH=%~1"
 set "W_ROOT=%~2"
+set "W_STAGE=%DIST_DIR%\windows-%W_ARCH%"
+if not exist "%W_STAGE%" mkdir "%W_STAGE%"
+
 echo ==^> Compiling Windows/%W_ARCH% binaries...
 set "CGO_ENABLED=0"
 set "GOOS=windows"
 set "GOARCH=%W_ARCH%"
 
-go build -trimpath -ldflags="-s -w" -o "%DIST_DIR%\bacnet-gw-windows-%W_ARCH%.exe" ./cmd/bacnet-gw
+go build -trimpath -ldflags="-s -w" -o "%W_STAGE%\bacnet-gw.exe" ./cmd/bacnet-gw
 if errorlevel 1 exit /b 1
+copy /Y "%W_STAGE%\bacnet-gw.exe" "%DIST_DIR%\bacnet-gw-windows-%W_ARCH%.exe" >nul
 
-go build -trimpath -ldflags="-s -w" -o "%DIST_DIR%\mock-exhibition-windows-%W_ARCH%.exe" ./cmd/mock-exhibition
+go build -trimpath -ldflags="-s -w" -o "%W_STAGE%\mock-exhibition.exe" ./cmd/mock-exhibition
 if errorlevel 1 exit /b 1
+copy /Y "%W_STAGE%\mock-exhibition.exe" "%DIST_DIR%\mock-exhibition-windows-%W_ARCH%.exe" >nul
+
+copy /Y "config.example.yaml" "%W_STAGE%\config.example.yaml" >nul
+copy /Y ".env.example" "%W_STAGE%\.env.example" >nul
+if exist "deploy\install-windows.ps1" copy /Y "deploy\install-windows.ps1" "%W_STAGE%\install-windows.ps1" >nul
+if exist "dashboard.jpeg" copy /Y "dashboard.jpeg" "%W_STAGE%\dashboard.jpeg" >nul
+if exist "bacnet devices.jpeg" copy /Y "bacnet devices.jpeg" "%W_STAGE%\bacnet devices.jpeg" >nul
+
+set "ZIP_OUT=%DIST_DIR%\bacnet-gw-windows-%W_ARCH%.zip"
+if exist "%ZIP_OUT%" del /F /Q "%ZIP_OUT%"
+tar -a -cf "%ZIP_OUT%" -C "%DIST_DIR%" "windows-%W_ARCH%"
 
 if "%W_ROOT%"=="1" (
-    copy /Y "%DIST_DIR%\bacnet-gw-windows-%W_ARCH%.exe" "bacnet-gw.exe" >nul
-    copy /Y "%DIST_DIR%\mock-exhibition-windows-%W_ARCH%.exe" "mock-exhibition.exe" >nul
+    copy /Y "%W_STAGE%\bacnet-gw.exe" "bacnet-gw.exe" >nul
+    copy /Y "%W_STAGE%\mock-exhibition.exe" "mock-exhibition.exe" >nul
 )
 exit /b 0
 
