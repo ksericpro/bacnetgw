@@ -82,4 +82,36 @@ func TestLoadPointsFromProductionAndExampleYAML(t *testing.T) {
 	}
 }
 
+func TestLoadCDEKongAliasYAML(t *testing.T) {
+	tmpDir := t.TempDir()
+	yamlPath := filepath.Join(tmpDir, "config.yaml")
+	yamlContent := `
+cde:
+  enabled: true
+  base_url: "http://192.168.0.50:8088"
+  telemetry_endpoint: "/api/v1/bacnet/telemetry"
+  devices_endpoint: "/api/v1/bacnet/devices"
+  api_key: "zaarr-bacnet-gw01-key-2026"
+  auth_header: "X-API-Key"
+  timeout_seconds: 10
+  verify_tls: false
+`
+	if err := os.WriteFile(yamlPath, []byte(yamlContent), 0600); err != nil {
+		t.Fatalf("write yaml: %v", err)
+	}
+	cfg, err := Load(yamlPath, "")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if !cfg.IMOPS.Enabled || cfg.IMOPS.BaseURL != "http://192.168.0.50:8088" {
+		t.Fatalf("unexpected CDE enabled/base_url: %+v", cfg.IMOPS)
+	}
+	if cfg.IMOPS.AuthType != "api_key" || cfg.IMOPS.APIKey != "zaarr-bacnet-gw01-key-2026" || cfg.IMOPS.APIKeyHeader != "X-API-Key" {
+		t.Fatalf("unexpected CDE auth config: %+v", cfg.IMOPS)
+	}
+	if cfg.IMOPS.HTTPTimeoutMS != 10000 || !cfg.IMOPS.InsecureSkipTLS() {
+		t.Fatalf("unexpected timeout/verify_tls: timeout=%d skipTLS=%v", cfg.IMOPS.HTTPTimeoutMS, cfg.IMOPS.InsecureSkipTLS())
+	}
+}
+
 

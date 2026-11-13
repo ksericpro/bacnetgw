@@ -3,7 +3,7 @@
 # Usage: .\bacnet-gw.exe -config config.sim.yaml   (or run .\start-sim.bat)
 # ==============================================================================
 
-gateway_id: "zaarr-bacnet-gw-sim"
+gateway_id: "zaarr-bacnet-gw-01"
 site_name: "Smart Nation Exhibition System"
 log_level: "info"
 
@@ -32,9 +32,15 @@ polling:
   only_catalog_points: true
 
 imops:
-  enabled: false                          # Matches production (set true to test pushing batches to mock-exhibition on :8085)
-  base_url: "http://127.0.0.1:8085"       # Local mock IMOPS receiver inside mock-exhibition.exe
-  auth_type: "none"
+  enabled: true                           # Pushes simulated 12-sensor telemetry to CDE Kong API Gateway
+  base_url: "http://127.0.0.1:8088"       # CDE Kong API Gateway (use http://127.0.0.1:8085 for standalone mock receiver)
+  telemetry_path: "/api/v1/bacnet/telemetry"
+  devices_path: "/api/v1/bacnet/devices"
+  auth_type: "api_key"
+  api_key_header: "X-API-Key"
+  api_key: "zaarr-bacnet-gw01-key-2026"
+  http_timeout_ms: 10000
+  verify_tls: false
   batch_max_points: 100
   flush_interval_ms: 500
 

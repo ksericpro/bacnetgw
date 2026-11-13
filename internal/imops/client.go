@@ -3,6 +3,7 @@ package imops
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -152,16 +153,23 @@ func NewClient(gatewayID, siteName string, cfg config.IMOPSConfig, logger *slog.
 		cfg.FlushIntervalMS = 2000
 	}
 
+	httpCli := &http.Client{
+		Timeout: timeout,
+	}
+	if cfg.InsecureSkipTLS() {
+		httpCli.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
+
 	c := &Client{
-		gatewayID: gatewayID,
-		siteName:  siteName,
-		cfg:       cfg,
-		httpClient: &http.Client{
-			Timeout: timeout,
-		},
-		logger:  logger,
-		flushCh: make(chan struct{}, 1),
-		closed:  make(chan struct{}),
+		gatewayID:  gatewayID,
+		siteName:   siteName,
+		cfg:        cfg,
+		httpClient: httpCli,
+		logger:     logger,
+		flushCh:    make(chan struct{}, 1),
+		closed:     make(chan struct{}),
 	}
 
 	if !cfg.Enabled {

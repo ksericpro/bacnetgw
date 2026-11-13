@@ -65,41 +65,50 @@ What `start-sim.bat` starts automatically:
 
 ---
 
-## 3. Simulating the 7 Dry Contacts (`sim-contacts.ps1`)
+## 3. Simulating Discrete Contacts & Continuous Sensors (`sim-contacts.ps1`)
 
-### Mode A: Interactive Keyboard Menu
+### Mode A: Interactive Keyboard Menu (All 12 Sensors)
 Run without arguments:
 ```powershell
 .\sim-contacts.ps1
 ```
-- Press **`1` – `7`** to toggle `BI-1` through `BI-7` between **ON (`1` -> Flashing)** and **OFF (`0` -> Solid Green)**.
-- Press **`A`** to turn **ALL 7 contacts ON** simultaneously.
-- Press **`O`** to reset **ALL 7 contacts OFF** (Normal).
-- Press **`D`** to run an **Auto-Demo Sweep** (cycles `BI-1`..`BI-7` ON for 2 seconds each, then resets OFF).
-- Press **`Q`** to quit the menu.
+- **Keys `1` – `7` (Discrete Dry Contacts):** Toggle `BI-1` through `BI-7` between **ON (`1` -> Flashing)** and **OFF (`0` -> Solid Green)**.
+- **Keys `8` – `12` (Continuous Analog Sensors):** Enter any exact float value for `AI-101` (`°C`), `AI-102` (`%RH`), `AV-27126` (Setpoint `°C`), `AI-201` (`°C`), or `AI-202` (`%RH`).
+- **Key `C` (Continuous Live Drift):** Auto-fluctuates Temperature & Humidity smoothly every **2 seconds** (press any key to pause) so you can watch continuous telemetry stream into `:8090` and CDE Kong (`:8088`).
+- **Key `R`:** Randomizes all 5 analog sensor values once.
+- **Keys `A` / `O`:** Set **ALL 7 contacts ON** (`A`) or reset **ALL 7 contacts OFF** (`O`).
+- **Key `D`:** Run an **Auto-Demo Sweep** (cycles `BI-1`..`BI-7` ON for 2 seconds each, then resets OFF).
+- **Key `Q`:** Quit the menu.
 
 ### Mode B: One-Shot CLI Commands
-Trigger or clear specific contacts from scripts or another PowerShell window:
+Trigger contacts or inject exact continuous values from scripts or another PowerShell window:
 ```powershell
+# Discrete dry contacts (BI-1 .. BI-7):
 .\sim-contacts.ps1 BI-1 on      # WD3 Water Leak -> Flashing Red
 .\sim-contacts.ps1 BI-1 off     # WD3 Water Leak -> Normal (Green)
-
 .\sim-contacts.ps1 BI-2 on      # Motion Sensor -> Flashing Amber
-.\sim-contacts.ps1 BI-2 off     # Motion Sensor -> Clear (Green)
-
-.\sim-contacts.ps1 3 on         # Shorthand '3' also maps to BI-3 (Fire Alarm)
+.\sim-contacts.ps1 3 on         # Shorthand '3' maps to BI-3 (Fire Alarm)
 .\sim-contacts.ps1 all on       # Flash all 7 dry contacts at once
 .\sim-contacts.ps1 all off      # Reset all 7 dry contacts to normal
 .\sim-contacts.ps1 demo         # Run sequential 1..7 demo sweep
+
+# Continuous analog values (AI-101, AI-102, AV-27126, AI-201, AI-202):
+.\sim-contacts.ps1 AI-101 26.8   # BW-INT-M Temperature -> 26.8 °C
+.\sim-contacts.ps1 AI-102 61.5   # BW-INT-M Humidity    -> 61.5 %RH
+.\sim-contacts.ps1 AV-27126 21.0 # BW-INT-M Setpoint    -> 21.0 °C
+.\sim-contacts.ps1 AI-201 27.4   # BW-TH-M Temperature  -> 27.4 °C
+.\sim-contacts.ps1 AI-202 65.2   # BW-TH-M Humidity     -> 65.2 %RH
+.\sim-contacts.ps1 random        # Randomize all 5 analog values once
+.\sim-contacts.ps1 stream        # Stream continuous 2s drift until keypress
 ```
 
-Each toggle updates the simulated P864 object's `Present_Value` **and** emits a real BACnet `Unconfirmed-COV-Notification` UDP packet to `bacnet-gw.exe`, so the Web UI at `http://127.0.0.1:8090` updates within ~1–1.5 seconds.
+Each update changes the simulated P864 object's `Present_Value` **and** emits a real BACnet `Unconfirmed-COV-Notification` UDP packet to `bacnet-gw.exe`, updating both `http://127.0.0.1:8090` and CDE Kong (`http://localhost:8088/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026`) within ~0.5–1.5 seconds.
 
 ---
 
-## 4. Simulating the 5 Continuous Analog Sensors
+## 4. Direct HTTP Control API on `mock-exhibition.exe`
 
-While `mock-exhibition.exe` is running (note: `AI-201` also drifts slightly every 15 seconds automatically), you can push any floating-point value to the 5 analog objects using PowerShell:
+Under the hood, `sim-contacts.ps1` calls `/sim/set` on `mock-exhibition.exe` (`http://127.0.0.1:8085`). You can also call it directly from any tool or script:
 
 ```powershell
 # BW-INT-M (Wireless Air Touch Display: Temp, Humidity, Setpoint)

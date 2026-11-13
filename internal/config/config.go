@@ -106,7 +106,13 @@ type IMOPSConfig struct {
 	HTTPTimeoutMS     int               `json:"http_timeout_ms"`
 	MaxRetries        int               `json:"max_retries"`
 	RetryBaseBackoffM int               `json:"retry_base_backoff_ms"`
+	VerifyTLS         *bool             `json:"verify_tls,omitempty"` // false = skip TLS cert check (e.g. self-signed Kong :8443)
 	DryRunLogPayloads bool              `json:"dry_run_log_payloads"` // Log outbound JSON when BaseURL is not set yet
+}
+
+// InsecureSkipTLS reports whether TLS certificate verification is explicitly disabled (verify_tls: false).
+func (c IMOPSConfig) InsecureSkipTLS() bool {
+	return c.VerifyTLS != nil && !*c.VerifyTLS
 }
 
 // EffectiveUsername returns Username (falling back to legacy BasicUsername).
@@ -667,8 +673,8 @@ func appendYAMLListItem(cfg *Config, path string, val string) error {
 }
 
 func setYAMLField(cfg *Config, path string, val string) error {
-	if strings.HasPrefix(path, "imops.extra_headers.") {
-		hdrName := strings.TrimPrefix(path, "imops.extra_headers.")
+	if strings.HasPrefix(path, "imops.extra_headers.") || strings.HasPrefix(path, "cde.extra_headers.") {
+		hdrName := strings.TrimPrefix(strings.TrimPrefix(path, "imops.extra_headers."), "cde.extra_headers.")
 		if cfg.IMOPS.ExtraHeaders == nil {
 			cfg.IMOPS.ExtraHeaders = make(map[string]string)
 		}
@@ -786,69 +792,84 @@ func setYAMLField(cfg *Config, path string, val string) error {
 		}
 		cfg.Polling.OnlyCatalogPoints = b
 
-	case "imops.enabled":
+	case "imops.enabled", "cde.enabled":
 		b, err := strconv.ParseBool(val)
 		if err != nil {
 			return err
 		}
 		cfg.IMOPS.Enabled = b
-	case "imops.base_url":
+	case "imops.base_url", "cde.base_url":
 		cfg.IMOPS.BaseURL = val
-	case "imops.telemetry_path":
+	case "imops.telemetry_path", "imops.telemetry_endpoint", "cde.telemetry_path", "cde.telemetry_endpoint":
 		cfg.IMOPS.TelemetryPath = val
-	case "imops.devices_path":
+	case "imops.devices_path", "imops.devices_endpoint", "cde.devices_path", "cde.devices_endpoint":
 		cfg.IMOPS.DevicesPath = val
-	case "imops.packet_events_path":
+	case "imops.packet_events_path", "cde.packet_events_path":
 		cfg.IMOPS.PacketEventsPath = val
-	case "imops.login_path":
+	case "imops.login_path", "cde.login_path":
 		cfg.IMOPS.LoginPath = val
-	case "imops.auth_type":
+	case "imops.auth_type", "cde.auth_type":
 		cfg.IMOPS.AuthType = val
-	case "imops.username":
+	case "imops.username", "cde.username":
 		cfg.IMOPS.Username = val
-	case "imops.password":
+	case "imops.password", "cde.password":
 		cfg.IMOPS.Password = val
-	case "imops.api_key_header":
+	case "imops.api_key_header", "imops.auth_header", "cde.api_key_header", "cde.auth_header":
 		cfg.IMOPS.APIKeyHeader = val
-	case "imops.api_key":
+	case "imops.api_key", "cde.api_key":
 		cfg.IMOPS.APIKey = val
-	case "imops.bearer_token":
+		if strings.HasPrefix(path, "cde.") && (cfg.IMOPS.AuthType == "" || cfg.IMOPS.AuthType == "basic") && val != "" {
+			cfg.IMOPS.AuthType = "api_key"
+		}
+	case "imops.bearer_token", "cde.bearer_token":
 		cfg.IMOPS.BearerToken = val
-	case "imops.basic_username":
+	case "imops.basic_username", "cde.basic_username":
 		cfg.IMOPS.BasicUsername = val
-	case "imops.basic_password":
+	case "imops.basic_password", "cde.basic_password":
 		cfg.IMOPS.BasicPassword = val
-	case "imops.batch_max_points":
+	case "imops.batch_max_points", "cde.batch_max_points":
 		n, err := strconv.Atoi(val)
 		if err != nil {
 			return err
 		}
 		cfg.IMOPS.BatchMaxPoints = n
-	case "imops.flush_interval_ms":
+	case "imops.flush_interval_ms", "cde.flush_interval_ms":
 		n, err := strconv.Atoi(val)
 		if err != nil {
 			return err
 		}
 		cfg.IMOPS.FlushIntervalMS = n
-	case "imops.http_timeout_ms":
+	case "imops.http_timeout_ms", "cde.http_timeout_ms":
 		n, err := strconv.Atoi(val)
 		if err != nil {
 			return err
 		}
 		cfg.IMOPS.HTTPTimeoutMS = n
-	case "imops.max_retries":
+	case "imops.timeout_seconds", "cde.timeout_seconds":
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			return err
+		}
+		cfg.IMOPS.HTTPTimeoutMS = n * 1000
+	case "imops.verify_tls", "cde.verify_tls":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return err
+		}
+		cfg.IMOPS.VerifyTLS = &b
+	case "imops.max_retries", "cde.max_retries":
 		n, err := strconv.Atoi(val)
 		if err != nil {
 			return err
 		}
 		cfg.IMOPS.MaxRetries = n
-	case "imops.retry_base_backoff_ms":
+	case "imops.retry_base_backoff_ms", "cde.retry_base_backoff_ms":
 		n, err := strconv.Atoi(val)
 		if err != nil {
 			return err
 		}
 		cfg.IMOPS.RetryBaseBackoffM = n
-	case "imops.dry_run_log_payloads":
+	case "imops.dry_run_log_payloads", "cde.dry_run_log_payloads":
 		b, err := strconv.ParseBool(val)
 		if err != nil {
 			return err

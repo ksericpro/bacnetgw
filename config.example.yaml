@@ -37,22 +37,23 @@ polling:
   allowed_device_ids: []      # Empty = allow controllers in 'points:' (or e.g. [864077, 300])
 
 imops:
-  enabled: false              # false = disable IMOPS (BACnet + Dashboard only); set true to push to IMOPS API
-  base_url: ""                # Set your external IMOPS API base URL, e.g. "https://api.imops.example.com"
+  enabled: false              # false = disable outbound push; set true to push to CDE Kong / IMOPS API
+  base_url: ""                # e.g. "http://<CDE_SERVER_IP>:8088" or "https://<CDE_SERVER_IP>:8443"
   telemetry_path: "/api/v1/bacnet/telemetry"
   devices_path: "/api/v1/bacnet/devices"
   packet_events_path: "/api/v1/bacnet/packets"
-  auth_type: "basic"          # basic (username + password) | login (POST username/password -> token) | bearer | api_key | none
-  username: ""                # IMOPS username
-  password: ""                # IMOPS password
+  auth_type: "api_key"        # api_key | bearer | basic | login | none
+  username: ""                # Username (for basic / login)
+  password: ""                # Password (for basic / login)
   login_path: "/api/v1/auth/login" # Only used if auth_type: "login"
   api_key_header: "X-API-Key"
-  api_key: ""
+  api_key: ""                 # e.g. "zaarr-bacnet-gw01-key-2026"
   bearer_token: ""
   extra_headers: {}
   batch_max_points: 100
   flush_interval_ms: 1500
   http_timeout_ms: 10000
+  verify_tls: false           # false = allow self-signed TLS cert (e.g. Kong :8443)
   max_retries: 3
   retry_base_backoff_ms: 500
   dry_run_log_payloads: true  # Logs JSON payloads locally if enabled: true and base_url is empty

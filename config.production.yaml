@@ -39,27 +39,30 @@ polling:
   forward_packet_events: false
   allowed_device_ids: []      # Empty = allow controllers in 'points:' (or e.g. [864077, 300])
 
-# External IMOPS API Settings (set enabled: true and fill credentials when ready)
+# External CDE (Kong API Gateway) Push Settings -> CDE Data Mart -> IMOPS
+# NOTE: Uses 'imops:' section so the deployed bacnet-gw.exe works with zero rebuild!
+#       Replace localhost with <CDE_SERVER_IP> when Kong runs on another LAN/VPN server.
 imops:
-  enabled: false
-  base_url: ""                # e.g. "https://api.imops.example.com"
+  enabled: true
+  base_url: "http://localhost:8088"           # HTTP: http://<CDE_SERVER_IP>:8088 | HTTPS: https://<CDE_SERVER_IP>:8443
   telemetry_path: "/api/v1/bacnet/telemetry"
   devices_path: "/api/v1/bacnet/devices"
   packet_events_path: "/api/v1/bacnet/packets"
-  auth_type: "basic"          # basic | login | bearer | api_key | none
+  auth_type: "api_key"                        # basic | login | bearer | api_key | none
   username: ""
   password: ""
   login_path: "/api/v1/auth/login"
   api_key_header: "X-API-Key"
-  api_key: ""
+  api_key: "zaarr-bacnet-gw01-key-2026"
   bearer_token: ""
   extra_headers: {}
   batch_max_points: 100
   flush_interval_ms: 1500
   http_timeout_ms: 10000
+  verify_tls: false                           # Allows self-signed TLS if using https://<CDE_SERVER_IP>:8443
   max_retries: 3
   retry_base_backoff_ms: 500
-  dry_run_log_payloads: true
+  dry_run_log_payloads: false
 
 # ==============================================================================
 # Monitored BACnet Points Mapping (edit/add/remove points here — no recompile!)

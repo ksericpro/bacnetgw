@@ -77,34 +77,217 @@ All 12 points reside on **Optergy P864 (`device_id: 864077`, `192.168.0.160:4780
 
 ---
 
-## 3. Production Gateway Configuration (`bacnet-gw ➔ CDE`)
+## 3. Production Gateway Configuration (`bacnet-gw ➔ CDE Kong API Gateway`)
 
-Once CDE API Gateway provides its endpoint URL and API key, update the `imops:` block in `config.production.yaml` on the VAST PC (the config block is named `imops:` in the gateway binary, and points directly to CDE):
+### CDE Kong API Gateway Endpoints & Credentials
+
+| Setting | Configured Value for `zaarr-bacnet-gw-01` |
+| :--- | :--- |
+| **API Gateway Base URL (HTTP)** | `http://<CDE_SERVER_IP>:8088` *(or `http://localhost:8088` on same machine)* |
+| **API Gateway Base URL (HTTPS)** | `https://<CDE_SERVER_IP>:8443` *(with `verify_tls: false` for self-signed cert)* |
+| **1. Sensor Telemetry Push Endpoint** | `POST /api/v1/bacnet/telemetry` |
+| **2. Controller Discovery / Status Endpoint** | `POST /api/v1/bacnet/devices` |
+| **3. CDE Data Mart Verification Endpoint** | `GET /api/v1/bacnet/status` *(Header `X-API-Key` or `?apikey=zaarr-bacnet-gw01-key-2026`)* |
+| **Authentication Header** | `X-API-Key: zaarr-bacnet-gw01-key-2026` |
+| **Content-Type / User-Agent** | `Content-Type: application/json` / `User-Agent: zaarr-bacnet-gw/1.0` |
+| **Expected Success Response** | `HTTP 202 Accepted` (`{"status": "accepted", ...}`) |
+
+### Ready-to-Use Block in `config.production.yaml`
+*(Note: Keep the section key as `imops:` so the already-deployed production `bacnet-gw.exe` works with zero rebuild; `cde:` is also supported as an alias in the latest binary.)*
 
 ```yaml
-# External CDE Ingestion API Settings (forwards from bacnet-gw -> CDE API Gateway)
+# External CDE (Kong API Gateway) Push Settings -> CDE Data Mart -> IMOPS
 imops:
   enabled: true
-  base_url: "https://<cde-api-gateway-domain>"
+  base_url: "http://<CDE_SERVER_IP>:8088"      # Or https://<CDE_SERVER_IP>:8443
   telemetry_path: "/api/v1/bacnet/telemetry"
   devices_path: "/api/v1/bacnet/devices"
   packet_events_path: "/api/v1/bacnet/packets" # Only used if polling.forward_packet_events: true
   auth_type: "api_key"                         # Supports: api_key | bearer | basic | login
   api_key_header: "X-API-Key"
-  api_key: "<CDE_GENERATED_API_KEY>"
+  api_key: "zaarr-bacnet-gw01-key-2026"
   batch_max_points: 100
   flush_interval_ms: 1500
   http_timeout_ms: 10000
+  verify_tls: false                            # Allows self-signed Kong TLS on :8443
   max_retries: 3
   retry_base_backoff_ms: 500
   dry_run_log_payloads: false
 ```
 
-After restarting the Windows service, open `http://127.0.0.1:8090` on the VAST PC and confirm under **IMOPS API Delivery** that `Batches` and `Readings` increment with `Failed: 0`.
+After restarting the Windows service, open:
+1. Local Gateway Dashboard (`http://127.0.0.1:8090` on VAST PC) — confirm **IMOPS API Delivery** shows `Batches` and `Readings` incrementing with `Failed: 0`.
+2. CDE Data Mart Status (`http://<CDE_SERVER_IP>:8088/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026`) — confirm the 12 points are stored in CDE.
 
 ---
 
-## 4. Field Mapping Reference (`BACnet GW ➔ CDE ➔ IMOPS`)
+## 4. Outbound Gateway Endpoints Explained & Sample Payloads
+
+`bacnet-gw` defines three outbound paths in `config.production.yaml`. Here is how they differ and the exact JSON payload each sends:
+
+| Config Key | Route | Purpose | When It Fires | Active in Production? |
+| :--- | :--- | :--- | :--- | :--- |
+| **`telemetry_path`** | `POST /api/v1/bacnet/telemetry` | **12 Sensor Readings & Alarms** (`AI-101`, `AI-102`, `AV-27126`, `AI-201`, `AI-202`, `BI-1`..`BI-7`) | Every **5 seconds** (`poll`) + **immediately** on real-time COV change (`cov`) | **YES** (Main sensor stream) |
+| **`devices_path`** | `POST /api/v1/bacnet/devices` | **Optergy P864 Controller Hardware Health** (`online: true/false`, IP, model, firmware) | On discovery, every 10m metadata sync, after **2 missed polls (~10s)** when P864 goes offline, and on recovery | **YES** (Prevents stale UI if P864 loses power/LAN) |
+| **`packet_events_path`** | `POST /api/v1/bacnet/packets` | **Raw UDP 47808 Wire Packet Audit** (low-level `BVLC`/`APDU` frame headers, Wireshark-style) | Only when `polling.forward_packet_events: true` | **NO — Disabled** (`forward_packet_events: false`) |
+
+---
+
+### 4.1 `telemetry_path` — `POST /api/v1/bacnet/telemetry`
+Carries batched readings for the 12 sensors (`source_type: "poll"` every 5s, or `source_type: "cov"` on instant change):
+
+```json
+{
+  "gateway_id": "zaarr-bacnet-gw-01",
+  "site_name": "Smart Nation Exhibition System",
+  "batch_id": "20261113T055500Z-18",
+  "sent_at": "2026-11-13T05:55:00Z",
+  "count": 2,
+  "readings": [
+    {
+      "timestamp": "2026-11-13T05:54:59.810Z",
+      "source_type": "poll",
+      "device_id": 864077,
+      "device_name": "P864-864077",
+      "controller_model": "P864",
+      "device_address": "192.168.0.160:47808",
+      "object_type": "analog-input",
+      "object_instance": 101,
+      "object_id": "analog-input:101",
+      "short_object_id": "AI-101",
+      "point_name": "BW-INT-M (WIRELESS AIR TOUCH DISPLAY)",
+      "property_label": "Temperature",
+      "dashboard_label": "BW-INT-M",
+      "connection_bus": "BG-1000-M (Wireless)",
+      "value": 23.45,
+      "value_text": "23.45 °C",
+      "unit": "°C",
+      "unit_id": 62,
+      "is_triggered": false,
+      "is_alarm": false,
+      "quality": "good",
+      "status_flags": {
+        "in_alarm": false,
+        "fault": false,
+        "overridden": false,
+        "out_of_service": false
+      }
+    },
+    {
+      "timestamp": "2026-11-13T05:54:59.920Z",
+      "source_type": "cov",
+      "device_id": 864077,
+      "device_name": "P864-864077",
+      "controller_model": "P864",
+      "device_address": "192.168.0.160:47808",
+      "object_type": "binary-input",
+      "object_instance": 1,
+      "object_id": "binary-input:1",
+      "short_object_id": "BI-1",
+      "point_name": "WD3 (WATER LEAK)",
+      "property_label": "Water detected",
+      "dashboard_label": "WD3",
+      "connection_bus": "IN 1 • Dry Contact (LED 1)",
+      "value": 1,
+      "value_text": "Water Detected",
+      "is_triggered": true,
+      "is_alarm": true,
+      "quality": "alarm",
+      "status_flags": {
+        "in_alarm": false,
+        "fault": false,
+        "overridden": false,
+        "out_of_service": false
+      }
+    }
+  ]
+}
+```
+
+---
+
+### 4.2 `devices_path` — `POST /api/v1/bacnet/devices`
+Reports the connectivity & hardware profile of the **Optergy P864 controller (`#864077`)** itself. Because `/telemetry` stops sending readings if the P864 loses power or Ethernet, `/devices` explicitly alerts CDE & IMOPS within ~10 seconds (2 missed polls) that the controller is offline.
+
+**Sample A — Controller Online (Discovery / Recovery):**
+```json
+{
+  "gateway_id": "zaarr-bacnet-gw-01",
+  "site_name": "Smart Nation Exhibition System",
+  "sent_at": "2026-11-13T05:55:00Z",
+  "device": {
+    "device_id": 864077,
+    "object_name": "P864-864077",
+    "model_name": "P864",
+    "vendor_name": "Optergy",
+    "vendor_id": 515,
+    "firmware_revision": "2.4.0",
+    "controller_role": "field_controller",
+    "address": "192.168.0.160:47808",
+    "online": true,
+    "communication_status": "online",
+    "point_count": 12,
+    "discovered_at": "2026-11-13T00:00:05Z"
+  }
+}
+```
+
+**Sample B — Controller Unreachable (After 2 Missed Polls / ~10s):**
+```json
+{
+  "gateway_id": "zaarr-bacnet-gw-01",
+  "site_name": "Smart Nation Exhibition System",
+  "sent_at": "2026-11-13T05:56:10Z",
+  "device": {
+    "device_id": 864077,
+    "object_name": "P864-864077",
+    "model_name": "P864",
+    "vendor_name": "Optergy",
+    "vendor_id": 515,
+    "firmware_revision": "2.4.0",
+    "controller_role": "field_controller",
+    "address": "192.168.0.160:47808",
+    "online": false,
+    "communication_status": "communication_failure",
+    "point_count": 12,
+    "discovered_at": "2026-11-13T00:00:05Z"
+  }
+}
+```
+
+---
+
+### 4.3 `packet_events_path` — `POST /api/v1/bacnet/packets` *(Optional / Disabled by Default)*
+Only active if `polling.forward_packet_events: true` is enabled for deep BACnet/IP network diagnostics (kept `false` in production so CDE Kong does not need this route):
+
+```json
+{
+  "gateway_id": "zaarr-bacnet-gw-01",
+  "site_name": "Smart Nation Exhibition System",
+  "sent_at": "2026-11-13T05:55:00Z",
+  "count": 1,
+  "packets": [
+    {
+      "timestamp": "2026-11-13T05:54:59.918Z",
+      "source": {
+        "ip": "192.168.0.160",
+        "port": 47808
+      },
+      "bvlc_function": 10,
+      "bvlc_name": "Original-Unicast-NPDU",
+      "is_network_msg": false,
+      "pdu_type": "Unconfirmed-Request",
+      "service_choice": 2,
+      "service_name": "Unconfirmed-COV-Notification",
+      "length": 42
+    }
+  ]
+}
+```
+
+---
+
+## 5. Field Mapping Reference (`BACnet GW ➔ CDE ➔ IMOPS`)
 
 | BACnet Gateway Field (`TelemetryReading`) | CDE Transformation / Logic | IMOPS Field (`sensors[]`) | Example Value |
 |---|---|---|---|
@@ -124,7 +307,7 @@ After restarting the Windows service, open `http://127.0.0.1:8090` on the VAST P
 
 ---
 
-## 5. Prompt for CDE Team (Copy-Paste Ready)
+## 6. Prompt for CDE Team (Copy-Paste Ready)
 
 ````markdown
 # Task: Build CDE BACnet Ingestion & Transformation Adapter (BACnet GW ➔ CDE ➔ IMOPS)
@@ -329,7 +512,7 @@ Also forward controller connectivity changes from `/api/v1/bacnet/devices` to IM
 
 ---
 
-## 6. Prompt for IMOPS Team (Copy-Paste Ready)
+## 7. Prompt for IMOPS Team (Copy-Paste Ready)
 
 ````markdown
 # Task: Build IMOPS Sensor Ingestion APIs & Live 12-Sensor UI Dashboard
@@ -494,17 +677,68 @@ Use `sensor_id` as the unique identifier:
 
 ---
 
-## 7. Rollout & Verification Checklist
+## 8. Local Simulation & End-to-End CDE Verification Guide
+
+You can test the full 12-sensor pipeline (`mock-exhibition.exe ➔ bacnet-gw.exe ➔ CDE Kong API Gateway`) locally without physical hardware using `config.sim.yaml` and `sim-contacts.ps1`.
+
+### Step 1: Start Local Simulator + Gateway
+Ensure CDE (Kong API Gateway) is running on `:8088` (if on another host, set `imops.base_url: "http://<CDE_SERVER_IP>:8088"` in `config.sim.yaml`), then run:
+
+```powershell
+.\start-sim.bat
+```
+
+This launches:
+1. **`mock-exhibition.exe`** — Emulates Optergy P864 (`#864077`) with all 12 sensors on `127.0.0.1:47810` + simulator control API on `http://127.0.0.1:8085`.
+2. **`bacnet-gw.exe -config config.sim.yaml`** — Polls all 12 points + listens for real-time COV and pushes batches to CDE Kong (`http://127.0.0.1:8088`) with `X-API-Key: zaarr-bacnet-gw01-key-2026`.
+3. **Local Gateway Dashboard** — Opens `http://127.0.0.1:8090` (confirm **IMOPS API Delivery** increments with `Failed: 0`).
+4. **Interactive 12-Sensor Controller** — Opens `.\sim-contacts.ps1`.
+
+### Step 2: Simulate Both Discrete Alarms & Continuous Analog Values (`sim-contacts.ps1`)
+
+#### A. Interactive Keyboard Menu (`.\sim-contacts.ps1`)
+- **`1` – `7`:** Toggle the 7 discrete dry-contact alarms (`BI-1` Water Leak .. `BI-7` Rack Door) ON (`1`) or OFF (`0`).
+- **`8` – `12`:** Enter any custom floating-point reading for the 5 continuous analog sensors:
+  - `8` = `AI-101` (BW-INT-M Temperature, `°C`)
+  - `9` = `AI-102` (BW-INT-M Humidity, `%RH`)
+  - `10` = `AV-27126` (BW-INT-M Temperature Setpoint, `°C`)
+  - `11` = `AI-201` (BW-TH-M Temperature, `°C`)
+  - `12` = `AI-202` (BW-TH-M Humidity, `%RH`)
+- **`C` (Continuous Live Drift):** Automatically fluctuates Temperature & Humidity every **2 seconds** continuously (press any key to pause) to test live streaming into CDE and IMOPS.
+- **`R`:** Randomize all 5 analog readings once.
+- **`A` / `O` / `D`:** Turn ALL 7 contacts ON (`A`), reset ALL OFF (`O`), or run sequential alarm demo sweep (`D`).
+
+#### B. Direct CLI One-Liners
+```powershell
+# Set exact continuous analog values (emits immediate BACnet COV -> CDE):
+.\sim-contacts.ps1 AI-101 26.8      # BW-INT-M Temperature -> 26.8 °C
+.\sim-contacts.ps1 AI-102 61.5      # BW-INT-M Humidity    -> 61.5 %RH
+.\sim-contacts.ps1 AV-27126 21.0    # BW-INT-M Setpoint    -> 21.0 °C
+.\sim-contacts.ps1 AI-201 27.4      # BW-TH-M Temperature  -> 27.4 °C
+.\sim-contacts.ps1 AI-202 65.2      # BW-TH-M Humidity     -> 65.2 %RH
+
+# Start continuous 2-second live analog drift from CLI:
+.\sim-contacts.ps1 stream
+
+# Toggle discrete dry-contact alarms from CLI:
+.\sim-contacts.ps1 BI-1 on          # Trigger Water Leak Alarm
+.\sim-contacts.ps1 all off          # Clear all 7 alarms
+```
+
+### Step 3: Verify Data Saved in CDE Data Mart
+Open in browser or run via `curl`:
+```powershell
+curl.exe "http://localhost:8088/api/v1/bacnet/status" -H "X-API-Key: zaarr-bacnet-gw01-key-2026"
+# Or in browser: http://localhost:8088/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026
+```
+
+---
+
+## 9. Rollout & Verification Checklist
 
 - [ ] **Step 1 (IMOPS):** IMOPS deploys ingestion endpoints + dashboard and shares `base_url` + auth credentials with CDE team.
-- [ ] **Step 2 (CDE):** CDE deploys `/api/v1/bacnet/telemetry` and `/api/v1/bacnet/devices` on CDE API Gateway + transformation worker pointing to IMOPS, and shares CDE `base_url` + `X-API-Key`.
-- [ ] **Step 3 (Smoke Test CDE ➔ IMOPS):** Send a single sample `curl` POST to CDE API Gateway and verify the sensor updates appear on the IMOPS UI Dashboard:
-  ```powershell
-  curl.exe -X POST "https://<cde-api-gateway>/api/v1/bacnet/telemetry" `
-    -H "Content-Type: application/json" `
-    -H "X-API-Key: <CDE_API_KEY>" `
-    -d "{\"gateway_id\":\"zaarr-bacnet-gw-01\",\"site_name\":\"Smart Nation Exhibition System\",\"batch_id\":\"test-1\",\"sent_at\":\"2026-11-13T01:20:00Z\",\"count\":1,\"readings\":[{\"timestamp\":\"2026-11-13T01:20:00Z\",\"source_type\":\"poll\",\"device_id\":864077,\"device_name\":\"P864-864077\",\"controller_model\":\"P864\",\"device_address\":\"192.168.0.160:47808\",\"object_type\":\"analog-input\",\"object_instance\":101,\"object_id\":\"analog-input:101\",\"short_object_id\":\"AI-101\",\"point_name\":\"BW-INT-M (WIRELESS AIR TOUCH DISPLAY)\",\"property_label\":\"Temperature\",\"dashboard_label\":\"BW-INT-M\",\"value\":23.5,\"value_text\":\"23.5 °C\",\"unit\":\"°C\",\"is_triggered\":false,\"is_alarm\":false,\"quality\":\"good\",\"status_flags\":{\"in_alarm\":false,\"fault\":false,\"overridden\":false,\"out_of_service\":false}}]}"
-  ```
-- [ ] **Step 4 (Enable in Production):** Set `imops.enabled: true`, `imops.base_url`, and `imops.api_key` in `config.production.yaml` on the VAST PC and restart the `bacnet-gw` service.
-- [ ] **Step 5 (Live Physical Test):** Trigger one dry contact (e.g., `BI-2` Motion or `BI-7` Rack Door) and confirm instant COV propagation across `bacnet-gw` (`http://127.0.0.1:8090`) ➔ CDE ➔ IMOPS UI Dashboard.
+- [x] **Step 2 (CDE Kong API Gateway):** CDE deployed Kong routes (`POST /api/v1/bacnet/telemetry`, `POST /api/v1/bacnet/devices`, `GET /api/v1/bacnet/status`) on `:8088` (HTTP) / `:8443` (HTTPS) with `X-API-Key: zaarr-bacnet-gw01-key-2026`.
+- [x] **Step 3 (Local End-to-End Test `bacnet-gw ➔ CDE Kong`):** Verified live delivery of both discrete dry-contact alarms (`BI-1`..`BI-7`) and continuous analog telemetry (`AI-101`, `AI-102`, `AV-27126`, `AI-201`, `AI-202`) into CDE via `start-sim.bat` + `sim-contacts.ps1`.
+- [ ] **Step 4 (Deploy / Enable on VAST PC Production):** Copy `dist\bacnet-gw-windows-amd64.zip` (or update `config.production.yaml`), replace `localhost` with `<CDE_SERVER_IP>` in `imops.base_url`, and restart the `bacnet-gw` Windows service.
+- [ ] **Step 5 (Live Physical Test):** Trigger one dry contact (e.g., `BI-2` Motion or `BI-7` Rack Door) and confirm instant COV propagation across `bacnet-gw` (`http://127.0.0.1:8090`) ➔ CDE (`http://<CDE_SERVER_IP>:8088/api/v1/bacnet/status`) ➔ IMOPS UI Dashboard.
 
