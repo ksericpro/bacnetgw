@@ -25,9 +25,9 @@ func ClassifyController(modelName, objectName, vendorName, description string) s
 	}
 }
 
-// ClassifyPoint matches a BACnet point against 'Optergy BACnet Points.xlsx' first, then falls back to name heuristics.
-func ClassifyPoint(deviceID uint32, modelName, deviceObjName, controllerRole, pointName, description string, objID bacnet.ObjectID, unitSymbol string) (equipment string, bus string) {
-	if cp, ok := LookupCatalogPoint(deviceID, modelName, deviceObjName, objID); ok {
+// ClassifyPoint matches a BACnet point against the active catalog first, then falls back to name heuristics.
+func ClassifyPoint(catalog []CatalogPoint, deviceID uint32, modelName, deviceObjName, controllerRole, pointName, description string, objID bacnet.ObjectID, unitSymbol string) (equipment string, bus string) {
+	if cp, ok := LookupCatalogPointInList(catalog, deviceID, modelName, deviceObjName, objID); ok {
 		return cp.SensorName, cp.PhysicalInput
 	}
 

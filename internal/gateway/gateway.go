@@ -74,6 +74,7 @@ type ManagedDevice struct {
 // Gateway coordinates subnet discovery, BACnet listener/polling, and IMOPS delivery.
 type Gateway struct {
 	cfg        config.Config
+	catalog    []CatalogPoint
 	logger     *slog.Logger
 	bacnetCli  *bacnet.Client
 	imopsCli   *imops.Client
@@ -117,11 +118,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger) (*Gateway,
 		return nil, formatMissingSubnetError(selector, allSubnets)
 	}
 
-	bcastTargets := buildBroadcastTargets(cfg.Network, selector, subnets)
+	catalog := ResolveCatalogPoints(cfg.Points)
+	bcastTargets := buildBroadcastTargets(cfg.Network, selector, subnets, CatalogControllerIPs(catalog)...)
 	imopsCli := imops.NewClient(cfg.GatewayID, cfg.SiteName, cfg.IMOPS, logger)
 
 	gw := &Gateway{
 		cfg:              cfg,
+		catalog:          catalog,
 		logger:           logger,
 		imopsCli:         imopsCli,
 		selectedSubnet:   selector,
@@ -180,7 +183,7 @@ func formatMissingSubnetError(selector string, available []bacnet.SubnetInfo) er
 	return fmt.Errorf("selected subnet %q did not match any active IPv4 interface; available: %s", selector, strings.Join(parts, ", "))
 }
 
-func buildBroadcastTargets(netCfg config.NetworkConfig, selector string, subnets []bacnet.SubnetInfo) []*net.UDPAddr {
+func buildBroadcastTargets(netCfg config.NetworkConfig, selector string, subnets []bacnet.SubnetInfo, controllerIPs ...string) []*net.UDPAddr {
 	port := netCfg.Port
 	if port <= 0 {
 		port = bacnet.DefaultPort
@@ -193,22 +196,23 @@ func buildBroadcastTargets(netCfg config.NetworkConfig, selector string, subnets
 		}
 	}
 
-	prodControllerIP := net.ParseIP(ProductionP864IP)
 	for _, sn := range subnets {
 		targets = append(targets, &net.UDPAddr{
 			IP:   sn.BroadcastIP,
 			Port: port,
 		})
-		// If we are on the 192.168.0.0/24 production subnet, also send a direct unicast Who-Is to 192.168.0.160:47808
+		cidrStr := sn.NetworkCIDR
+		if cidrStr == "" {
+			cidrStr = sn.CIDR
+		}
+		_, cidrNet, cidrErr := net.ParseCIDR(cidrStr)
+		// Also send direct unicast Who-Is to configured controller IPs on this subnet
 		// so discovery still succeeds even if a managed switch suppresses subnet broadcast storms.
-		if prodControllerIP != nil {
-			cidrStr := sn.NetworkCIDR
-			if cidrStr == "" {
-				cidrStr = sn.CIDR
-			}
-			if _, cidrNet, err := net.ParseCIDR(cidrStr); err == nil && cidrNet.Contains(prodControllerIP) {
+		for _, rawIP := range controllerIPs {
+			ctrlIP := net.ParseIP(strings.TrimSpace(rawIP))
+			if ctrlIP != nil && cidrErr == nil && cidrNet.Contains(ctrlIP) {
 				targets = append(targets, &net.UDPAddr{
-					IP:   prodControllerIP,
+					IP:   ctrlIP,
 					Port: bacnet.DefaultPort,
 				})
 			}
@@ -337,7 +341,7 @@ func (g *Gateway) SelectSubnet(selector string) error {
 		return formatMissingSubnetError(norm, allSubnets)
 	}
 
-	newTargets := buildBroadcastTargets(g.cfg.Network, norm, matched)
+	newTargets := buildBroadcastTargets(g.cfg.Network, norm, matched, CatalogControllerIPs(g.catalog)...)
 
 	g.netMu.Lock()
 	g.selectedSubnet = norm
@@ -595,11 +599,11 @@ func (g *Gateway) syncDeviceMetadataAndInitialPoll(ctx context.Context, dev *Man
 
 	// 2. Determine target BACnet objects to monitor
 	var telemetryObjs []bacnet.ObjectID
-	isProdP864 := IsProductionP864Controller(devID, modelName, objName)
+	devCatalogPts := CatalogPointsForDevice(g.catalog, devID, modelName, objName)
 
-	if g.cfg.Polling.OnlyCatalogPoints {
-		if !isProdP864 {
-			g.logger.Info("skipping non-catalog BACnet device (set polling.only_catalog_points=false to monitor all devices)",
+	if g.cfg.Polling.OnlyCatalogPoints && len(g.catalog) > 0 {
+		if len(devCatalogPts) == 0 {
+			g.logger.Info("skipping non-catalog BACnet device (add points in config.yaml or set polling.only_catalog_points=false)",
 				"device_id", devID,
 				"name", objName,
 				"model", modelName,
@@ -614,11 +618,13 @@ func (g *Gateway) syncDeviceMetadataAndInitialPoll(ctx context.Context, dev *Man
 			return
 		}
 
-		// Bind directly to the exact 12 production points defined in 'Optergy BACnet Points.xlsx'
+		// Bind directly to the configured catalog points for this controller
 		seen := make(map[bacnet.ObjectID]bool)
-		for _, cp := range ProductionP864Points() {
-			telemetryObjs = append(telemetryObjs, cp.ObjectID)
-			seen[cp.ObjectID] = true
+		for _, cp := range devCatalogPts {
+			if !seen[cp.ObjectID] {
+				telemetryObjs = append(telemetryObjs, cp.ObjectID)
+				seen[cp.ObjectID] = true
+			}
 		}
 		for _, extraRaw := range g.cfg.Polling.ExtraObjectIDs {
 			if oid, parseErr := bacnet.ParseShortObjectID(extraRaw); parseErr == nil && !seen[oid] {
@@ -726,7 +732,7 @@ func (g *Gateway) fetchPointsMetadata(
 			ShortID:  oid.ShortCode(),
 			Name:     oid.ShortCode(),
 		}
-		if cp, ok := LookupCatalogPoint(devID, modelName, devObjName, oid); ok {
+		if cp, ok := LookupCatalogPointInList(g.catalog, devID, modelName, devObjName, oid); ok {
 			applyCatalogDefaults(meta, cp)
 		}
 		out[oid] = meta
@@ -801,11 +807,15 @@ func (g *Gateway) fetchPointsMetadata(
 					applyPointMetaProperty(meta, bacnet.PropUnits, res.Values)
 				}
 			} else if oid.Type.IsBinary() {
-				if inact := g.readStringProp(ctx, addr, oid, bacnet.PropInactiveText); inact != "" {
-					meta.InactiveText = inact
+				if meta.CatalogOrder == 0 || meta.InactiveText == "" {
+					if inact := g.readStringProp(ctx, addr, oid, bacnet.PropInactiveText); inact != "" {
+						meta.InactiveText = inact
+					}
 				}
-				if act := g.readStringProp(ctx, addr, oid, bacnet.PropActiveText); act != "" {
-					meta.ActiveText = act
+				if meta.CatalogOrder == 0 || meta.ActiveText == "" {
+					if act := g.readStringProp(ctx, addr, oid, bacnet.PropActiveText); act != "" {
+						meta.ActiveText = act
+					}
 				}
 			}
 		}
@@ -813,7 +823,7 @@ func (g *Gateway) fetchPointsMetadata(
 
 	for _, meta := range out {
 		if meta.EquipmentProfile == "" {
-			eq, bus := ClassifyPoint(devID, modelName, devObjName, ctrlRole, meta.Name, meta.Description, meta.ObjectID, meta.UnitSymbol)
+			eq, bus := ClassifyPoint(g.catalog, devID, modelName, devObjName, ctrlRole, meta.Name, meta.Description, meta.ObjectID, meta.UnitSymbol)
 			meta.EquipmentProfile = eq
 			meta.ConnectionBus = bus
 		}
@@ -836,6 +846,8 @@ func applyCatalogDefaults(meta *PointMeta, cp CatalogPoint) {
 		u := cp.DefaultUnitID
 		meta.UnitID = &u
 		meta.UnitSymbol = bacnet.EngineeringUnitSymbol(u)
+	} else if cp.DefaultUnitSymbol != "" {
+		meta.UnitSymbol = cp.DefaultUnitSymbol
 	}
 	if cp.DefaultInactive != "" {
 		meta.InactiveText = cp.DefaultInactive
@@ -868,18 +880,22 @@ func applyPointMetaProperty(meta *PointMeta, prop bacnet.PropertyID, vals []any)
 			u, valid = uint32(raw), true
 		}
 		// Only override catalog default unit if controller reports a real engineering unit (not 95 = no-units)
-		if valid && (u != 95 || meta.UnitID == nil) {
+		if valid && (u != 95 || (meta.UnitID == nil && meta.UnitSymbol == "")) {
 			uCopy := u
 			meta.UnitID = &uCopy
 			meta.UnitSymbol = bacnet.EngineeringUnitSymbol(u)
 		}
 	case bacnet.PropInactiveText:
 		if s, ok := vals[0].(string); ok && strings.TrimSpace(s) != "" {
-			meta.InactiveText = s
+			if meta.CatalogOrder == 0 || meta.InactiveText == "" {
+				meta.InactiveText = s
+			}
 		}
 	case bacnet.PropActiveText:
 		if s, ok := vals[0].(string); ok && strings.TrimSpace(s) != "" {
-			meta.ActiveText = s
+			if meta.CatalogOrder == 0 || meta.ActiveText == "" {
+				meta.ActiveText = s
+			}
 		}
 	case bacnet.PropStateText:
 		var states []string
@@ -1181,7 +1197,7 @@ func (g *Gateway) handleCOV(cov *bacnet.COVNotification) {
 			ShortID:  cov.MonitoredObject.ShortCode(),
 			Name:     cov.MonitoredObject.ShortCode(),
 		}
-		if cp, ok := LookupCatalogPoint(cov.InitiatingDeviceID, "", "", cov.MonitoredObject); ok {
+		if cp, ok := LookupCatalogPointInList(g.catalog, cov.InitiatingDeviceID, "", "", cov.MonitoredObject); ok {
 			applyCatalogDefaults(meta, cp)
 		}
 		normVal, valText, isTrig, isAlarm := evaluatePointValue(meta, pv, sf)
@@ -1216,8 +1232,8 @@ func (g *Gateway) handleCOV(cov *bacnet.COVNotification) {
 	dev.LastSeenAt = now
 	meta, ok := dev.Points[cov.MonitoredObject]
 	if !ok {
-		if g.cfg.Polling.OnlyCatalogPoints {
-			if _, inCat := LookupCatalogPoint(dev.DeviceID, dev.ModelName, dev.ObjectName, cov.MonitoredObject); !inCat {
+		if g.cfg.Polling.OnlyCatalogPoints && len(g.catalog) > 0 {
+			if _, inCat := LookupCatalogPointInList(g.catalog, dev.DeviceID, dev.ModelName, dev.ObjectName, cov.MonitoredObject); !inCat {
 				dev.mu.Unlock()
 				return
 			}
@@ -1227,7 +1243,7 @@ func (g *Gateway) handleCOV(cov *bacnet.COVNotification) {
 			ShortID:  cov.MonitoredObject.ShortCode(),
 			Name:     cov.MonitoredObject.ShortCode(),
 		}
-		if cp, inCat := LookupCatalogPoint(dev.DeviceID, dev.ModelName, dev.ObjectName, cov.MonitoredObject); inCat {
+		if cp, inCat := LookupCatalogPointInList(g.catalog, dev.DeviceID, dev.ModelName, dev.ObjectName, cov.MonitoredObject); inCat {
 			applyCatalogDefaults(meta, cp)
 		}
 		dev.Points[cov.MonitoredObject] = meta
@@ -1533,3 +1549,125 @@ func (g *Gateway) handleSelectSubnet(w http.ResponseWriter, r *http.Request) {
 		"broadcast_targets": snap.BroadcastTargets,
 	})
 }
+
+// CatalogPoint defines a monitored BACnet point configured in config.yaml.
+type CatalogPoint struct {
+	Order             int             `json:"order"`
+	DeviceID          uint32          `json:"device_id"`
+	ControllerIP      string          `json:"controller_ip"`
+	ObjectID          bacnet.ObjectID `json:"object_id"`
+	ShortID           string          `json:"short_id"`
+	SensorName        string          `json:"sensor_name"`
+	DashboardLabel    string          `json:"dashboard_label"`
+	PropertyLabel     string          `json:"property_label"`
+	PhysicalInput     string          `json:"physical_input"`
+	DefaultUnitID     uint32          `json:"default_unit_id,omitempty"`
+	DefaultUnitSymbol string          `json:"default_unit_symbol,omitempty"`
+	DefaultInactive   string          `json:"default_inactive,omitempty"`
+	DefaultActive     string          `json:"default_active,omitempty"`
+	AlarmOnActive     bool            `json:"alarm_on_active"`
+	TriggerOnActive   bool            `json:"trigger_on_active"`
+}
+
+// ResolveCatalogPoints builds the monitored point catalog strictly from config.yaml.
+func ResolveCatalogPoints(cfgPoints []config.PointConfig) []CatalogPoint {
+	out := make([]CatalogPoint, 0, len(cfgPoints))
+	for i, pt := range cfgPoints {
+		oid, err := bacnet.ParseShortObjectID(pt.Object)
+		if err != nil {
+			continue
+		}
+		shortID := oid.ShortCode()
+		sensorName := strings.TrimSpace(pt.SensorName)
+		dashLabel := strings.TrimSpace(pt.DashboardLabel)
+		if dashLabel == "" {
+			dashLabel = sensorName
+		}
+		if dashLabel == "" {
+			dashLabel = shortID
+		}
+		propLabel := strings.TrimSpace(pt.PropertyLabel)
+		if propLabel == "" {
+			propLabel = shortID
+		}
+
+		var unitID uint32
+		var unitSym string
+		if rawUnit := strings.TrimSpace(pt.Unit); rawUnit != "" {
+			if u, ok := bacnet.ParseEngineeringUnit(rawUnit); ok {
+				unitID = u
+				unitSym = bacnet.EngineeringUnitSymbol(u)
+			} else {
+				unitSym = rawUnit
+			}
+		}
+
+		trigOnActive := pt.AlarmOnActive || oid.Type.IsBinary()
+		if pt.TriggerOnActive != nil {
+			trigOnActive = *pt.TriggerOnActive
+		}
+
+		out = append(out, CatalogPoint{
+			Order:             i + 1,
+			DeviceID:          pt.DeviceID,
+			ControllerIP:      strings.TrimSpace(pt.ControllerIP),
+			ObjectID:          oid,
+			ShortID:           shortID,
+			SensorName:        sensorName,
+			DashboardLabel:    dashLabel,
+			PropertyLabel:     propLabel,
+			PhysicalInput:     strings.TrimSpace(pt.PhysicalInput),
+			DefaultUnitID:     unitID,
+			DefaultUnitSymbol: unitSym,
+			DefaultInactive:   strings.TrimSpace(pt.InactiveText),
+			DefaultActive:     strings.TrimSpace(pt.ActiveText),
+			AlarmOnActive:     pt.AlarmOnActive,
+			TriggerOnActive:   trigOnActive,
+		})
+	}
+	return out
+}
+
+// MatchesCatalogController reports whether cp applies to the discovered BACnet controller.
+func MatchesCatalogController(cp CatalogPoint, deviceID uint32, _, _ string) bool {
+	if cp.DeviceID == 0 {
+		return true
+	}
+	return deviceID == cp.DeviceID
+}
+
+// CatalogPointsForDevice returns all CatalogPoints matching the given controller in configured order.
+func CatalogPointsForDevice(catalog []CatalogPoint, deviceID uint32, modelName, objectName string) []CatalogPoint {
+	var matched []CatalogPoint
+	for _, cp := range catalog {
+		if MatchesCatalogController(cp, deviceID, modelName, objectName) {
+			matched = append(matched, cp)
+		}
+	}
+	return matched
+}
+
+// LookupCatalogPointInList finds a CatalogPoint in catalog matching (deviceID, objID).
+func LookupCatalogPointInList(catalog []CatalogPoint, deviceID uint32, modelName, objectName string, objID bacnet.ObjectID) (CatalogPoint, bool) {
+	for _, cp := range catalog {
+		if cp.ObjectID == objID && MatchesCatalogController(cp, deviceID, modelName, objectName) {
+			return cp, true
+		}
+	}
+	return CatalogPoint{}, false
+}
+
+// CatalogControllerIPs returns deduplicated controller IPs defined across configured points.
+func CatalogControllerIPs(catalog []CatalogPoint) []string {
+	seen := make(map[string]bool)
+	var out []string
+	for _, cp := range catalog {
+		ip := strings.TrimSpace(cp.ControllerIP)
+		if ip != "" && !seen[ip] {
+			seen[ip] = true
+			out = append(out, ip)
+		}
+	}
+	return out
+}
+

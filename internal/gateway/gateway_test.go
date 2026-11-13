@@ -63,11 +63,15 @@ func TestProductionP864CatalogPointsAndIMOPS(t *testing.T) {
 	}
 	defer p864.Close()
 
-	cfg := config.Default() // OnlyCatalogPoints defaults to true
+	cfg, err := config.Load("../../config.example.yaml", "")
+	if err != nil {
+		t.Fatalf("load config.example.yaml: %v", err)
+	}
 	cfg.StatusAPI.Enabled = false
 	cfg.Network.BindIP = "127.0.0.1"
 	cfg.Network.Port = 0
 	cfg.Network.BroadcastOverrides = []string{p864.LocalAddr().String()}
+	cfg.IMOPS.Enabled = true
 	cfg.IMOPS.BaseURL = imopsSrv.URL
 	cfg.IMOPS.AuthType = "none"
 	cfg.IMOPS.FlushIntervalMS = 100
@@ -296,3 +300,99 @@ func TestBuildBroadcastTargetsIsolatesSelectedSubnet(t *testing.T) {
 		t.Fatalf("expected directed broadcast 192.168.0.255:47808 first, got %v", got)
 	}
 }
+
+func TestCustomConfigYAMLPointsMultiDevice(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	var mu sync.Mutex
+	byShortID := make(map[string]imops.TelemetryReading)
+
+	imopsSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/bacnet/telemetry" {
+			body, _ := io.ReadAll(r.Body)
+			var env imops.TelemetryBatchEnvelope
+			if err := json.Unmarshal(body, &env); err == nil {
+				mu.Lock()
+				for _, rd := range env.Readings {
+					byShortID[rd.ShortObjectID] = rd
+				}
+				mu.Unlock()
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer imopsSrv.Close()
+
+	p864 := simulator.NewProductionP864Controller()
+	if err := p864.Start(ctx, "127.0.0.1", 0, logger); err != nil {
+		t.Fatalf("start sim P864: %v", err)
+	}
+	defer p864.Close()
+
+	cfg := config.Default()
+	cfg.StatusAPI.Enabled = false
+	cfg.Network.BindIP = "127.0.0.1"
+	cfg.Network.Port = 0
+	cfg.Network.BroadcastOverrides = []string{p864.LocalAddr().String()}
+	cfg.Polling.OnlyCatalogPoints = true
+	cfg.Points = []config.PointConfig{
+		{
+			DeviceID:       864077,
+			Object:         "AI-101",
+			SensorName:     "Custom Zone Sensor",
+			DashboardLabel: "Zone-A",
+			PropertyLabel:  "Room Temp",
+			PhysicalInput:  "Custom Bus",
+			Unit:           "C",
+		},
+		{
+			DeviceID:       864077,
+			Object:         "BI-1",
+			SensorName:     "Custom Flood Sensor",
+			DashboardLabel: "Flood-1",
+			PropertyLabel:  "Flood Status",
+			InactiveText:   "Dry",
+			ActiveText:     "Flooded!",
+			AlarmOnActive:  true,
+		},
+	}
+	cfg.IMOPS.BaseURL = imopsSrv.URL
+	cfg.IMOPS.AuthType = "none"
+	cfg.IMOPS.FlushIntervalMS = 100
+
+	gw, err := New(ctx, cfg, logger)
+	if err != nil {
+		t.Fatalf("gateway.New: %v", err)
+	}
+	defer gw.Close()
+	if err := gw.Start(ctx); err != nil {
+		t.Fatalf("gateway.Start: %v", err)
+	}
+
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		cnt := len(byShortID)
+		mu.Unlock()
+		if cnt >= 2 {
+			break
+		}
+		time.Sleep(60 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(byShortID) != 2 {
+		t.Fatalf("expected strictly 2 custom YAML points monitored, got %d: %+v", len(byShortID), byShortID)
+	}
+	if byShortID["AI-101"].DashboardLabel != "Zone-A" || byShortID["AI-101"].Unit != "°C" {
+		t.Fatalf("unexpected custom AI-101 reading: %+v", byShortID["AI-101"])
+	}
+	if byShortID["BI-1"].DashboardLabel != "Flood-1" || byShortID["BI-1"].ValueText != "Dry" {
+		t.Fatalf("unexpected custom BI-1 reading: %+v", byShortID["BI-1"])
+	}
+}
+

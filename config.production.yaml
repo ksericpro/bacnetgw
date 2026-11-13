@@ -1,0 +1,211 @@
+# ==============================================================================
+# Single-File Production Configuration — BACnet/IP Listener & IMOPS Gateway
+# (All settings + point mappings in one file — no .env file required)
+# ==============================================================================
+
+gateway_id: "zaarr-bacnet-gw-01"
+site_name: "Smart Nation Exhibition System"
+log_level: "info" # debug | info | warn | error
+
+# Local Web Dashboard (set listen_addr to "0.0.0.0:8090" to access from other LAN PCs)
+status_api:
+  enabled: true
+  listen_addr: "127.0.0.1:8090"
+
+# BACnet/IP Network — locked to VAST PC Ethernet NIC
+network:
+  subnet: "Ethernet"          # Lock discovery to Ethernet adapter
+  interface: "Ethernet"       # Explicit NIC name
+  bind_ip: "192.168.0.197"    # Bind directly to Ethernet IP so Windows doesn't route out Wi-Fi
+  port: 47808                 # Standard BACnet/IP UDP port (0xBAC0)
+  reuse_port: true            # Enables SO_REUSEADDR to coexist with Optergy Studio if running
+  broadcast_overrides: []     # Optional explicit targets, e.g. ["192.168.0.255:47808"]
+  bbmd_address: ""            # Optional BBMD "ip:47808" for cross-VLAN Foreign Device mode
+  bbmd_ttl_seconds: 120
+  request_timeout_ms: 3000
+  max_retries: 2
+  include_raw_hex: false
+
+# Polling & Discovery Settings
+polling:
+  discovery_interval_sec: 60  # Active Who-Is broadcast interval
+  metadata_refresh_sec: 600   # Metadata refresh interval
+  poll_interval_sec: 5        # Present_Value & Status_Flags polling interval (5s)
+  rpm_batch_size: 8           # Max objects per ReadPropertyMultiple request
+  subscribe_cov: true         # Subscribe to real-time Unconfirmed-COV notifications
+  cov_lifetime_sec: 300
+  only_catalog_points: true   # true = strictly monitor the 'points:' list below; false = poll all objects
+  extra_object_ids: []        # Optional extra raw BACnet objects, e.g. ["BI-8", "AI-301"]
+  forward_packet_events: false
+  allowed_device_ids: []      # Empty = allow controllers in 'points:' (or e.g. [864077, 300])
+
+# External IMOPS API Settings (set enabled: true and fill credentials when ready)
+imops:
+  enabled: false
+  base_url: ""                # e.g. "https://api.imops.example.com"
+  telemetry_path: "/api/v1/bacnet/telemetry"
+  devices_path: "/api/v1/bacnet/devices"
+  packet_events_path: "/api/v1/bacnet/packets"
+  auth_type: "basic"          # basic | login | bearer | api_key | none
+  username: ""
+  password: ""
+  login_path: "/api/v1/auth/login"
+  api_key_header: "X-API-Key"
+  api_key: ""
+  bearer_token: ""
+  extra_headers: {}
+  batch_max_points: 100
+  flush_interval_ms: 1500
+  http_timeout_ms: 10000
+  max_retries: 3
+  retry_base_backoff_ms: 500
+  dry_run_log_payloads: true
+
+# ==============================================================================
+# Monitored BACnet Points Mapping (edit/add/remove points here — no recompile!)
+#   - Change device_id (e.g. 864077 for P864, 300 for Optergy AXON/Enterprise)
+#   - Change object ("AI-101", "AV-27126", "BI-1", "BO-1", "BV-1", etc.)
+#   - Customize labels, unit ("°C", "%RH", "ppm", "%", "V", "s"), state texts & alarms
+# ==============================================================================
+points:
+  # --- Wireless Sensor 1: BW-INT-M (Wireless Air Touch Display) ---
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "AI-101"
+    sensor_name: "BW-INT-M (WIRELESS AIR TOUCH DISPLAY)"
+    dashboard_label: "BW-INT-M"
+    property_label: "Temperature"
+    physical_input: "BG-1000-M (Wireless)"
+    unit: "°C"
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "AI-102"
+    sensor_name: "BW-INT-M (WIRELESS AIR TOUCH DISPLAY)"
+    dashboard_label: "BW-INT-M"
+    property_label: "Humidity"
+    physical_input: "BG-1000-M (Wireless)"
+    unit: "%RH"
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "AV-27126"
+    sensor_name: "BW-INT-M (WIRELESS AIR TOUCH DISPLAY)"
+    dashboard_label: "BW-INT-M"
+    property_label: "Temperature Setpoint"
+    physical_input: "BG-1000-M (Wireless)"
+    unit: "°C"
+
+  # --- Wireless Sensor 2: BW-TH-M (Wireless Temperature & Humidity Sensor) ---
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "AI-201"
+    sensor_name: "BW-TH-M (WIRELESS TEMPERATURE & HUMIDITY SENSOR)"
+    dashboard_label: "BW-TH-M"
+    property_label: "Temperature"
+    physical_input: "BG-1000-M (Wireless)"
+    unit: "°C"
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "AI-202"
+    sensor_name: "BW-TH-M (WIRELESS TEMPERATURE & HUMIDITY SENSOR)"
+    dashboard_label: "BW-TH-M"
+    property_label: "Humidity"
+    physical_input: "BG-1000-M (Wireless)"
+    unit: "%RH"
+
+  # --- Wired Dry Contact Inputs on P864 (BI-1 to BI-7) ---
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-1"
+    sensor_name: "WD3 (WATER LEAK)"
+    dashboard_label: "WD3"
+    property_label: "Water detected"
+    physical_input: "IN 1 • Dry Contact (LED 1)"
+    inactive_text: "Normal"
+    active_text: "Water Detected"
+    alarm_on_active: true
+    trigger_on_active: true
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-2"
+    sensor_name: "MSA237D 99 (MOTION SENSOR)"
+    dashboard_label: "MSA237D 99"
+    property_label: "Motion / presence detected"
+    physical_input: "IN 2 • Dry Contact (LED 2)"
+    inactive_text: "Clear"
+    active_text: "Motion Detected"
+    alarm_on_active: false
+    trigger_on_active: true
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-3"
+    sensor_name: "FIRE SENSOR"
+    dashboard_label: "Fire Detection Sensor"
+    property_label: "Fire alarm contact activated"
+    physical_input: "IN 3 • Dry Contact (LED 3)"
+    inactive_text: "Normal"
+    active_text: "Fire Alarm"
+    alarm_on_active: true
+    trigger_on_active: true
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-4"
+    sensor_name: "PERIMETER INTRUSION (MAXIBUS)"
+    dashboard_label: "PERIMETER INTRUSION (MAXIBUS)"
+    property_label: "Intrusion Detector"
+    physical_input: "IN 4 • Dry Contact (LED 4)"
+    inactive_text: "Secure"
+    active_text: "Intrusion Detected"
+    alarm_on_active: true
+    trigger_on_active: true
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-5"
+    sensor_name: "UPS MONITORING (DRY Contact)"
+    dashboard_label: "UPS MONITORING"
+    property_label: "UPS on battery / power failure"
+    physical_input: "IN 5 • Dry Contact (LED 5)"
+    inactive_text: "Mains OK"
+    active_text: "UPS On Battery / Failure"
+    alarm_on_active: true
+    trigger_on_active: true
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-6"
+    sensor_name: "Access Control System (DRY Contact)"
+    dashboard_label: "Access Control System"
+    property_label: "Unauthorized access / door forced open"
+    physical_input: "IN 6 • Dry Contact (LED 6)"
+    inactive_text: "Secure"
+    active_text: "Door Forced Open"
+    alarm_on_active: true
+    trigger_on_active: true
+
+  - device_id: 864077
+    controller_ip: "192.168.0.160"
+    object: "BI-7"
+    sensor_name: "Server Rack Door Contact (DRY Contact)"
+    dashboard_label: "Server Rack Door Contact"
+    property_label: "Rack door opened without authorization"
+    physical_input: "IN 7 • Dry Contact (LED 7)"
+    inactive_text: "Closed"
+    active_text: "Rack Door Opened"
+    alarm_on_active: true
+    trigger_on_active: true
+
+  # Example: Uncomment to also monitor CPU Load on Optergy Device 300 (192.168.0.158)
+  # - device_id: 300
+  #   controller_ip: "192.168.0.158"
+  #   object: "AI-2200"
+  #   sensor_name: "Optergy Server (Device 300)"
+  #   dashboard_label: "Optergy Server"
+  #   property_label: "System CPU Load"
+  #   physical_input: "Ethernet LAN"
+  #   unit: "%"

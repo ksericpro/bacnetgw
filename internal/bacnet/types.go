@@ -198,6 +198,16 @@ func (id ObjectID) ShortCode() string {
 		prefix = "MSO"
 	case ObjMultiStateValue:
 		prefix = "MSV"
+	case ObjAccumulator:
+		prefix = "ACC"
+	case ObjPulseConverter:
+		prefix = "PC"
+	case ObjIntegerValue:
+		prefix = "IV"
+	case ObjLargeAnalogValue:
+		prefix = "LAV"
+	case ObjPositiveIntegerValue:
+		prefix = "PIV"
 	case ObjDevice:
 		prefix = "DEV"
 	default:
@@ -234,12 +244,22 @@ func ParseShortObjectID(s string) (ObjectID, error) {
 		ot = ObjBinaryOutput
 	case "BV", "BINARY-VALUE", "BINARY_VALUE":
 		ot = ObjBinaryValue
-	case "MSI", "MULTI-STATE-INPUT":
+	case "MSI", "MULTI-STATE-INPUT", "MULTI_STATE_INPUT":
 		ot = ObjMultiStateInput
-	case "MSO", "MULTI-STATE-OUTPUT":
+	case "MSO", "MULTI-STATE-OUTPUT", "MULTI_STATE_OUTPUT":
 		ot = ObjMultiStateOutput
-	case "MSV", "MULTI-STATE-VALUE":
+	case "MSV", "MULTI-STATE-VALUE", "MULTI_STATE_VALUE":
 		ot = ObjMultiStateValue
+	case "ACC", "ACCUMULATOR":
+		ot = ObjAccumulator
+	case "PC", "PULSE-CONVERTER", "PULSE_CONVERTER":
+		ot = ObjPulseConverter
+	case "IV", "INTEGER-VALUE", "INTEGER_VALUE":
+		ot = ObjIntegerValue
+	case "LAV", "LARGE-ANALOG-VALUE", "LARGE_ANALOG_VALUE":
+		ot = ObjLargeAnalogValue
+	case "PIV", "POSITIVE-INTEGER-VALUE", "POSITIVE_INTEGER_VALUE":
+		ot = ObjPositiveIntegerValue
 	default:
 		return ObjectID{}, fmt.Errorf("unsupported BACnet object prefix %q", typPart)
 	}
@@ -492,4 +512,102 @@ func EngineeringUnitSymbol(unitID uint32) string {
 		return fmt.Sprintf("unit-%d", unitID)
 	}
 }
+
+// ParseEngineeringUnit converts a unit symbol/name (e.g. "°C", "C", "%RH", "ppm") or numeric ASHRAE unit ID into its uint32 ID.
+func ParseEngineeringUnit(s string) (uint32, bool) {
+	clean := strings.TrimSpace(s)
+	if clean == "" {
+		return 0, false
+	}
+	if strings.HasPrefix(strings.ToLower(clean), "unit-") {
+		if u, err := strconv.ParseUint(strings.TrimSpace(clean[5:]), 10, 32); err == nil {
+			return uint32(u), true
+		}
+	}
+	if u, err := strconv.ParseUint(clean, 10, 32); err == nil {
+		return uint32(u), true
+	}
+
+	switch strings.ToLower(clean) {
+	case "m²", "m2", "sq m":
+		return 0, true
+	case "ma":
+		return 2, true
+	case "a", "amp", "amps":
+		return 3, true
+	case "v", "volt", "volts":
+		return 5, true
+	case "kv":
+		return 6, true
+	case "va":
+		return 8, true
+	case "kva":
+		return 9, true
+	case "mva":
+		return 10, true
+	case "var":
+		return 11, true
+	case "kvar":
+		return 12, true
+	case "pf":
+		return 15, true
+	case "wh":
+		return 18, true
+	case "kwh":
+		return 19, true
+	case "mwh":
+		return 20, true
+	case "hz":
+		return 27, true
+	case "%rh", "rh":
+		return 29, true
+	case "w", "watt", "watts":
+		return 47, true
+	case "kw":
+		return 48, true
+	case "mw":
+		return 49, true
+	case "pa":
+		return 53, true
+	case "kpa":
+		return 54, true
+	case "bar":
+		return 55, true
+	case "°c", "c", "degc", "celsius":
+		return 62, true
+	case "k", "kelvin":
+		return 63, true
+	case "°f", "f", "degf", "fahrenheit":
+		return 64, true
+	case "h", "hr", "hour", "hours":
+		return 71, true
+	case "min", "minute", "minutes":
+		return 72, true
+	case "s", "sec", "second", "seconds":
+		return 73, true
+	case "l/s":
+		return 84, true
+	case "m³/s", "m3/s":
+		return 85, true
+	case "none", "no-units":
+		return 95, true
+	case "ppm":
+		return 96, true
+	case "ppb":
+		return 97, true
+	case "%", "percent":
+		return 98, true
+	case "m³/h", "m3/h":
+		return 135, true
+	case "ft³/min", "ft3/min", "cfm":
+		return 142, true
+	case "µg/m³", "ug/m3", "ug/m³":
+		return 219, true
+	case "mg/m³", "mg/m3":
+		return 220, true
+	default:
+		return 0, false
+	}
+}
+
 

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"bacnet-gw/internal/bacnet"
 )
 
 // Config holds the complete configuration for the BACnet-to-IMOPS gateway.
@@ -19,7 +21,24 @@ type Config struct {
 	StatusAPI StatusAPICfg  `json:"status_api"`
 	Network   NetworkConfig `json:"network"`
 	Polling   PollingConfig `json:"polling"`
+	Points    []PointConfig `json:"points,omitempty"`
 	IMOPS     IMOPSConfig   `json:"imops"`
+}
+
+// PointConfig maps a monitored BACnet object in config.yaml without recompiling.
+type PointConfig struct {
+	DeviceID        uint32 `json:"device_id"`                   // Target BACnet Device ID (e.g. 864077 or 300; 0 = match default controller)
+	ControllerIP    string `json:"controller_ip,omitempty"`     // Optional controller IP for direct unicast Who-Is (e.g. "192.168.0.160")
+	Object          string `json:"object"`                      // BACnet object shorthand, e.g. "AI-101", "AV-27126", "BI-1"
+	SensorName      string `json:"sensor_name,omitempty"`       // Equipment / sensor name, e.g. "WD3 (WATER LEAK)"
+	DashboardLabel  string `json:"dashboard_label,omitempty"`   // Short card title on dashboard, e.g. "WD3"
+	PropertyLabel   string `json:"property_label,omitempty"`    // Monitored property label, e.g. "Water detected"
+	PhysicalInput   string `json:"physical_input,omitempty"`    // Wiring / comm bus, e.g. "IN 1 • Dry Contact (LED 1)"
+	Unit            string `json:"unit,omitempty"`              // Optional unit symbol or ASHRAE unit ID, e.g. "°C", "%RH", "ppm", "%"
+	InactiveText    string `json:"inactive_text,omitempty"`     // Optional binary state=0 text, e.g. "Normal"
+	ActiveText      string `json:"active_text,omitempty"`       // Optional binary state=1 text, e.g. "Water Detected"
+	AlarmOnActive   bool   `json:"alarm_on_active"`             // Trigger critical alarm when binary input is Active (1)
+	TriggerOnActive *bool  `json:"trigger_on_active,omitempty"` // Optional override for triggered state when Active
 }
 
 // StatusAPICfg configures the local diagnostic/health HTTP endpoint.
@@ -222,6 +241,14 @@ func (c *Config) Validate() error {
 	}
 	if c.IMOPS.HTTPTimeoutMS <= 0 {
 		c.IMOPS.HTTPTimeoutMS = 10000
+	}
+	for i, pt := range c.Points {
+		if strings.TrimSpace(pt.Object) == "" {
+			return fmt.Errorf("points[%d]: missing required 'object' (e.g. \"AI-101\" or \"BI-1\")", i)
+		}
+		if _, err := bacnet.ParseShortObjectID(pt.Object); err != nil {
+			return fmt.Errorf("points[%d] (%s): %w", i, pt.Object, err)
+		}
 	}
 	return nil
 }
@@ -450,6 +477,8 @@ func applySimpleYAML(content string, cfg *Config) error {
 	}
 	var stack []stackEntry
 	var activeListPath string
+	var inPointsList bool
+	var pointsIndent int
 
 	lines := strings.Split(content, "\n")
 	for lineNo, rawLine := range lines {
@@ -462,6 +491,38 @@ func applySimpleYAML(content string, cfg *Config) error {
 		clean := stripInlineComment(strings.TrimSpace(trimmedRight))
 		if clean == "" {
 			continue
+		}
+
+		if inPointsList {
+			if indent <= pointsIndent && !strings.HasPrefix(clean, "-") {
+				inPointsList = false
+			} else {
+				if clean == "-" || strings.HasPrefix(clean, "- ") {
+					cfg.Points = append(cfg.Points, PointConfig{})
+					rest := strings.TrimSpace(strings.TrimPrefix(clean, "-"))
+					if rest != "" {
+						pk, pv, ok := strings.Cut(rest, ":")
+						if !ok {
+							return fmt.Errorf("line %d: expected key: value in points item, got %q", lineNo+1, rest)
+						}
+						if err := setPointConfigField(&cfg.Points[len(cfg.Points)-1], strings.TrimSpace(pk), unquoteValue(strings.TrimSpace(pv))); err != nil {
+							return fmt.Errorf("line %d (points.%s): %w", lineNo+1, strings.TrimSpace(pk), err)
+						}
+					}
+					continue
+				}
+				if len(cfg.Points) == 0 {
+					return fmt.Errorf("line %d: expected '- ' list entry under points, got %q", lineNo+1, clean)
+				}
+				pk, pv, ok := strings.Cut(clean, ":")
+				if !ok {
+					return fmt.Errorf("line %d: expected key: value in points item, got %q", lineNo+1, clean)
+				}
+				if err := setPointConfigField(&cfg.Points[len(cfg.Points)-1], strings.TrimSpace(pk), unquoteValue(strings.TrimSpace(pv))); err != nil {
+					return fmt.Errorf("line %d (points.%s): %w", lineNo+1, strings.TrimSpace(pk), err)
+				}
+				continue
+			}
 		}
 
 		// List item "- val"
@@ -492,6 +553,13 @@ func applySimpleYAML(content string, cfg *Config) error {
 		fullPath := strings.Join(pathParts, ".")
 
 		if val == "" {
+			if fullPath == "points" || fullPath == "polling.points" {
+				inPointsList = true
+				pointsIndent = indent
+				cfg.Points = []PointConfig{}
+				activeListPath = ""
+				continue
+			}
 			stack = append(stack, stackEntry{indent: indent, key: key})
 			activeListPath = fullPath
 			continue
@@ -529,7 +597,57 @@ func resetYAMLList(cfg *Config, path string) {
 		cfg.Polling.AllowedDeviceIDs = nil
 	case "polling.extra_object_ids":
 		cfg.Polling.ExtraObjectIDs = nil
+	case "points", "polling.points":
+		cfg.Points = []PointConfig{}
 	}
+}
+
+func setPointConfigField(pt *PointConfig, key string, val string) error {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "device_id":
+		if val == "" {
+			pt.DeviceID = 0
+			return nil
+		}
+		u, err := strconv.ParseUint(val, 10, 32)
+		if err != nil {
+			return fmt.Errorf("invalid device_id %q: %w", val, err)
+		}
+		pt.DeviceID = uint32(u)
+	case "controller_ip":
+		pt.ControllerIP = val
+	case "object", "object_id", "short_id":
+		pt.Object = val
+	case "sensor_name", "equipment", "equipment_profile":
+		pt.SensorName = val
+	case "dashboard_label", "label":
+		pt.DashboardLabel = val
+	case "property_label", "property":
+		pt.PropertyLabel = val
+	case "physical_input", "connection_bus", "input":
+		pt.PhysicalInput = val
+	case "unit", "units":
+		pt.Unit = val
+	case "inactive_text":
+		pt.InactiveText = val
+	case "active_text":
+		pt.ActiveText = val
+	case "alarm_on_active":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("invalid alarm_on_active %q: %w", val, err)
+		}
+		pt.AlarmOnActive = b
+	case "trigger_on_active":
+		b, err := strconv.ParseBool(val)
+		if err != nil {
+			return fmt.Errorf("invalid trigger_on_active %q: %w", val, err)
+		}
+		pt.TriggerOnActive = &b
+	default:
+		return fmt.Errorf("unknown point field %q", key)
+	}
+	return nil
 }
 
 func appendYAMLListItem(cfg *Config, path string, val string) error {

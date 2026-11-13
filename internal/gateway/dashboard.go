@@ -38,7 +38,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Optergy P864 BACnet Listener & IMOPS Gateway</title>
+<title>Smart Nation Exhibition System</title>
 <style>
   :root {
     --bg: #0b1120;
@@ -182,6 +182,8 @@ const dashboardHTML = `<!DOCTYPE html>
   .pill.active-event {
     border-color: var(--warn);
     background: rgba(69, 39, 6, 0.94);
+    animation: pulseEvent 1.1s infinite alternate;
+    z-index: 5;
   }
   .pill.active-event .p-val { color: #fcd34d; }
   .pill.alarm {
@@ -192,6 +194,10 @@ const dashboardHTML = `<!DOCTYPE html>
   }
   .pill.alarm .p-val { color: #fecaca; }
 
+  @keyframes pulseEvent {
+    from { box-shadow: 0 0 6px rgba(245,158,11,0.55); transform: translate(-50%, -50%) scale(1.0); }
+    to   { box-shadow: 0 0 18px rgba(245,158,11,1.0); transform: translate(-50%, -50%) scale(1.05); }
+  }
   @keyframes pulseAlarm {
     from { box-shadow: 0 0 6px rgba(239,68,68,0.6); transform: translate(-50%, -50%) scale(1.0); }
     to   { box-shadow: 0 0 18px rgba(239,68,68,1.0); transform: translate(-50%, -50%) scale(1.05); }
@@ -218,7 +224,7 @@ const dashboardHTML = `<!DOCTYPE html>
 <body>
 <header>
   <div class="title-group">
-    <h1 id="siteTitle">Optergy P864 BACnet Listener & IMOPS Gateway</h1>
+    <h1 id="siteTitle">Smart Nation Exhibition System</h1>
     <p id="listenInfo">Target: P864 (Device 864077 @ 192.168.0.160) • UDP 47808</p>
   </div>
   <div class="actions">
@@ -430,7 +436,7 @@ async function refreshStatus() {
     const res = await fetch('/status');
     const s = await res.json();
 
-    document.getElementById('siteTitle').textContent = s.site_name + ' — ' + s.gateway_id;
+    document.getElementById('siteTitle').textContent = s.site_name || 'Smart Nation Exhibition System';
     document.getElementById('listenInfo').textContent =
       'Bound: ' + s.bacnet_listen_addr + ' • Targets: ' + (s.broadcast_targets || []).join(', ');
 

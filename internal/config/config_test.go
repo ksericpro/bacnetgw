@@ -58,3 +58,28 @@ imops:
 	}
 }
 
+func TestLoadPointsFromProductionAndExampleYAML(t *testing.T) {
+	for _, rel := range []string{"../../config.production.yaml", "../../config.example.yaml", "../../config.sim.yaml"} {
+		cfg, err := Load(rel, "")
+		if err != nil {
+			t.Fatalf("Load(%s) failed: %v", rel, err)
+		}
+		if len(cfg.Points) != 12 {
+			t.Fatalf("%s: expected 12 configured points, got %d", rel, len(cfg.Points))
+		}
+		if cfg.Points[0].DeviceID != 864077 || cfg.Points[0].Object != "AI-101" || cfg.Points[0].Unit != "°C" {
+			t.Fatalf("%s: unexpected points[0]: %+v", rel, cfg.Points[0])
+		}
+		if cfg.Points[5].Object != "BI-1" || !cfg.Points[5].AlarmOnActive || cfg.Points[5].ActiveText != "Water Detected" {
+			t.Fatalf("%s: unexpected points[5] (BI-1): %+v", rel, cfg.Points[5])
+		}
+		if cfg.Points[6].Object != "BI-2" || cfg.Points[6].AlarmOnActive {
+			t.Fatalf("%s: expected BI-2 alarm_on_active=false, got %+v", rel, cfg.Points[6])
+		}
+		if cfg.Points[11].Object != "BI-7" || cfg.Points[11].InactiveText != "Closed" {
+			t.Fatalf("%s: unexpected points[11] (BI-7): %+v", rel, cfg.Points[11])
+		}
+	}
+}
+
+

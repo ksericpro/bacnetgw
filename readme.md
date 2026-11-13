@@ -82,51 +82,36 @@ Every reading displayed on the Web Dashboard (`http://127.0.0.1:8090/`) and sent
 
 ### Option 1: Start Locally with Simulated Production `P864` (`#864077`)
 
-Use the built-in simulator to test discovery, polling, `COV` alarms, the Digital Twin overlay, and IMOPS webhook batches with zero hardware.
+See **[simulation-and-testing.md](./simulation-and-testing.md)** for the complete simulation & testing guide.
 
-#### 1. Terminal 1 — Start Simulated `P864 (864077)` & Mock IMOPS Server:
+#### Quick One-Command Launch (Windows):
 
 ```powershell
-.\mock-exhibition.exe
+.\start-sim.bat
 ```
 
-_(Or from source: `go run ./cmd/mock-exhibition`)_
+`start-sim.bat` launches `mock-exhibition.exe`, starts `bacnet-gw.exe -config config.sim.yaml`, opens **http://127.0.0.1:8090/**, and opens the interactive dry-contact toggle menu (`.\sim-contacts.ps1`).
 
-#### 2. Terminal 2 — Start the BACnet Gateway:
+#### Toggle the 7 Dry Contacts (`BI-1` – `BI-7`) via `sim-contacts.ps1`:
 
 ```powershell
-$env:IMOPS_BASE_URL="http://127.0.0.1:8085"
-$env:BACNET_PORT="47809"
-$env:BACNET_BROADCAST_OVERRIDES="127.0.0.1:47810"
-.\bacnet-gw.exe
+.\sim-contacts.ps1              # Interactive keyboard menu (1-7 to toggle, A=All ON, O=All OFF, D=Demo)
+.\sim-contacts.ps1 BI-1 on      # WD3 Water Leak -> Flashing Red
+.\sim-contacts.ps1 BI-1 off     # WD3 Water Leak -> Solid Green (Normal)
+.\sim-contacts.ps1 BI-2 on      # MSA237D 99 Motion -> Flashing Amber
+.\sim-contacts.ps1 all on       # Flash all 7 dry contacts at once
+.\sim-contacts.ps1 all off      # Reset all 7 dry contacts to Normal
+.\sim-contacts.ps1 demo         # Auto-cycle BI-1..BI-7 one by one
 ```
 
-_(Or from source: `go run ./cmd/bacnet-gw`)_
-
-#### 3. Open the Live Dashboard & Simulate Alarms:
-
-- **Live Digital Twin Dashboard:** `http://127.0.0.1:8090/`
-- **Raw Status JSON:** `http://127.0.0.1:8090/status`
-- **Health Check:** `http://127.0.0.1:8090/healthz`
-
-Trigger or clear any point live from a third PowerShell terminal to verify real-time `COV` alerts:
+#### Update the 5 Continuous Analog Sensor Points (`AI-101`, `AI-102`, `AV-27126`, `AI-201`, `AI-202`):
 
 ```powershell
-# Trigger alarms (1 = Active)
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-1&val=1"  # WD3 Water Leak
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-2&val=1"  # MSA237D 99 Motion
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-3&val=1"  # Fire Detection Sensor
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-4&val=1"  # Perimeter Intrusion
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-5&val=1"  # UPS Monitoring
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-6&val=1"  # Access Control Door
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-7&val=1"  # Server Rack Door
-
-# Update wireless analog sensor value
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=AI-101&val=25.8"
-
-# Reset alarms back to Normal (0 = Inactive)
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-1&val=0"
-Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=BI-3&val=0"
+Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=AI-101&val=26.8"
+Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=AI-102&val=63.5"
+Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=AV-27126&val=22.5"
+Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=AI-201&val=29.4"
+Invoke-RestMethod -Method Post "http://127.0.0.1:8085/sim/set?point=AI-202&val=71.2"
 ```
 
 ---

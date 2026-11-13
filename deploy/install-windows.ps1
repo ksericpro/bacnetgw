@@ -11,9 +11,14 @@ try {
         throw "bacnet-gw.exe not found in $workDir"
     }
 
-    if (-not (Test-Path "$workDir\config.yaml") -and (Test-Path "$workDir\config.example.yaml")) {
-        Copy-Item "$workDir\config.example.yaml" "$workDir\config.yaml"
-        Write-Host "==> Created initial config.yaml from config.example.yaml"
+    if (-not (Test-Path "$workDir\config.yaml")) {
+        if (Test-Path "$workDir\config.production.yaml") {
+            Copy-Item "$workDir\config.production.yaml" "$workDir\config.yaml"
+            Write-Host "==> Created initial config.yaml from config.production.yaml"
+        } elseif (Test-Path "$workDir\config.example.yaml") {
+            Copy-Item "$workDir\config.example.yaml" "$workDir\config.yaml"
+            Write-Host "==> Created initial config.yaml from config.example.yaml"
+        }
     } else {
         Write-Host "==> Keeping existing config.yaml"
     }

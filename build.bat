@@ -145,9 +145,10 @@ set "B_ARCH=%~1"
 set "B_ARM=%~2"
 set "STAGE_NAME=linux-%B_ARCH%"
 set "STAGE_DIR=%DIST_DIR%\%STAGE_NAME%"
-if not exist "%STAGE_DIR%" mkdir "%STAGE_DIR%"
+if exist "%STAGE_DIR%" rmdir /S /Q "%STAGE_DIR%"
+mkdir "%STAGE_DIR%"
 
-echo ==^> Compiling Linux/%B_ARCH% static binaries...
+echo ==^> Compiling Linux/%B_ARCH% static binary...
 set "CGO_ENABLED=0"
 set "GOOS=linux"
 set "GOARCH=%B_ARCH%"
@@ -157,12 +158,9 @@ go build -trimpath -ldflags="-s -w" -o "%STAGE_DIR%\bacnet-gw" ./cmd/bacnet-gw
 if errorlevel 1 exit /b 1
 copy /Y "%STAGE_DIR%\bacnet-gw" "%DIST_DIR%\bacnet-gw-linux-%B_ARCH%" >nul
 
-go build -trimpath -ldflags="-s -w" -o "%STAGE_DIR%\mock-exhibition" ./cmd/mock-exhibition
-if errorlevel 1 exit /b 1
-
 :: Normalize Unix LF (\n) line endings for systemd & bash scripts
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "foreach ($f in @('deploy\bacnet-gw.service','deploy\install-ubuntu.sh','config.example.yaml','.env.example')) { $leaf = Split-Path -Leaf $f; $txt = [IO.File]::ReadAllText($f) -replace \"`r`n\",\"`n\"; [IO.File]::WriteAllBytes((Join-Path '%STAGE_DIR%' $leaf), [Text.UTF8Encoding]::new($false).GetBytes($txt)) }"
+  "foreach ($f in @('deploy\bacnet-gw.service','deploy\install-ubuntu.sh','config.example.yaml','config.production.yaml')) { if (Test-Path $f) { $leaf = Split-Path -Leaf $f; $txt = [IO.File]::ReadAllText($f) -replace \"`r`n\",\"`n\"; [IO.File]::WriteAllBytes((Join-Path '%STAGE_DIR%' $leaf), [Text.UTF8Encoding]::new($false).GetBytes($txt)) } }"
 if errorlevel 1 exit /b 1
 
 if exist "dashboard.jpeg" copy /Y "dashboard.jpeg" "%STAGE_DIR%\dashboard.jpeg" >nul
@@ -182,16 +180,17 @@ set "GOARM="
 exit /b 0
 
 :: ----------------------------------------------------------------------------
-:: Subroutine: Build static Windows .exe binaries
-:: %1 = GOARCH (amd64 | arm64), %2 = CopyToRoot (1 = also update .\bacnet-gw.exe)
+:: Subroutine: Build static Windows .exe production bundle
+:: %1 = GOARCH (amd64 | arm64), %2 = CopyToRoot (1 = also update local .\bacnet-gw.exe & .\mock-exhibition.exe)
 :: ----------------------------------------------------------------------------
 :build_windows
 set "W_ARCH=%~1"
 set "W_ROOT=%~2"
 set "W_STAGE=%DIST_DIR%\windows-%W_ARCH%"
-if not exist "%W_STAGE%" mkdir "%W_STAGE%"
+if exist "%W_STAGE%" rmdir /S /Q "%W_STAGE%"
+mkdir "%W_STAGE%"
 
-echo ==^> Compiling Windows/%W_ARCH% binaries...
+echo ==^> Compiling Windows/%W_ARCH% production bundle...
 set "CGO_ENABLED=0"
 set "GOOS=windows"
 set "GOARCH=%W_ARCH%"
@@ -200,13 +199,10 @@ go build -trimpath -ldflags="-s -w" -o "%W_STAGE%\bacnet-gw.exe" ./cmd/bacnet-gw
 if errorlevel 1 exit /b 1
 copy /Y "%W_STAGE%\bacnet-gw.exe" "%DIST_DIR%\bacnet-gw-windows-%W_ARCH%.exe" >nul
 
-go build -trimpath -ldflags="-s -w" -o "%W_STAGE%\mock-exhibition.exe" ./cmd/mock-exhibition
-if errorlevel 1 exit /b 1
-copy /Y "%W_STAGE%\mock-exhibition.exe" "%DIST_DIR%\mock-exhibition-windows-%W_ARCH%.exe" >nul
-
 copy /Y "config.example.yaml" "%W_STAGE%\config.example.yaml" >nul
-copy /Y ".env.example" "%W_STAGE%\.env.example" >nul
+if exist "config.production.yaml" copy /Y "config.production.yaml" "%W_STAGE%\config.production.yaml" >nul
 if exist "deploy\install-windows.ps1" copy /Y "deploy\install-windows.ps1" "%W_STAGE%\install-windows.ps1" >nul
+if exist "scan-points.bat" copy /Y "scan-points.bat" "%W_STAGE%\scan-points.bat" >nul
 if exist "dashboard.jpeg" copy /Y "dashboard.jpeg" "%W_STAGE%\dashboard.jpeg" >nul
 if exist "bacnet devices.jpeg" copy /Y "bacnet devices.jpeg" "%W_STAGE%\bacnet devices.jpeg" >nul
 
@@ -215,8 +211,8 @@ if exist "%ZIP_OUT%" del /F /Q "%ZIP_OUT%"
 tar -a -cf "%ZIP_OUT%" -C "%DIST_DIR%" "windows-%W_ARCH%"
 
 if "%W_ROOT%"=="1" (
-    copy /Y "%W_STAGE%\bacnet-gw.exe" "bacnet-gw.exe" >nul
-    copy /Y "%W_STAGE%\mock-exhibition.exe" "mock-exhibition.exe" >nul
+    copy /Y "%W_STAGE%\bacnet-gw.exe" "bacnet-gw.exe" >nul 2>&1
+    go build -trimpath -ldflags="-s -w" -o "mock-exhibition.exe" ./cmd/mock-exhibition >nul 2>&1
 )
 exit /b 0
 

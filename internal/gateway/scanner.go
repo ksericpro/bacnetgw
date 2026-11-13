@@ -83,7 +83,8 @@ func RunSubnetScan(ctx context.Context, cfg config.Config, opts ScanOptions, out
 		}
 	}
 
-	targets := buildBroadcastTargets(cfg.Network, selector, subnets)
+	catalog := ResolveCatalogPoints(cfg.Points)
+	targets := buildBroadcastTargets(cfg.Network, selector, subnets, CatalogControllerIPs(catalog)...)
 	// Also include common Optergy site controller IPs (192.168.0.158..161) if a 192.168.0.0/24 NIC is active
 	for _, sn := range subnets {
 		cidrStr := sn.NetworkCIDR
@@ -174,7 +175,7 @@ func RunSubnetScan(ctx context.Context, cfg config.Config, opts ScanOptions, out
 
 	results := make([]ScannedDevice, 0, len(iams))
 	for _, iam := range iams {
-		sd := enrichScannedDevice(ctx, cli, iam, opts.IncludePoints)
+		sd := enrichScannedDevice(ctx, cli, iam, opts.IncludePoints, catalog)
 		results = append(results, sd)
 	}
 
@@ -223,7 +224,7 @@ func RunSubnetScan(ctx context.Context, cfg config.Config, opts ScanOptions, out
 	return results, nil
 }
 
-func enrichScannedDevice(ctx context.Context, cli *bacnet.Client, iam *bacnet.IAmNotification, includePoints bool) ScannedDevice {
+func enrichScannedDevice(ctx context.Context, cli *bacnet.Client, iam *bacnet.IAmNotification, includePoints bool, catalog []CatalogPoint) ScannedDevice {
 	sd := ScannedDevice{
 		DeviceID: iam.DeviceID,
 		Address:  iam.Source,
@@ -300,7 +301,7 @@ func enrichScannedDevice(ctx context.Context, cli *bacnet.Client, iam *bacnet.IA
 			ShortID:  oid.ShortCode(),
 			Name:     oid.ShortCode(),
 		}
-		if cp, ok := LookupCatalogPoint(iam.DeviceID, sd.ModelName, sd.ObjectName, oid); ok {
+		if cp, ok := LookupCatalogPointInList(catalog, iam.DeviceID, sd.ModelName, sd.ObjectName, oid); ok {
 			applyCatalogDefaults(meta, cp)
 		}
 
@@ -387,4 +388,3 @@ func truncateCol(s string, maxLen int) string {
 	}
 	return s[:maxLen-3] + "..."
 }
-
