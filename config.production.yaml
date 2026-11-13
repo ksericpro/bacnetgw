@@ -40,11 +40,11 @@ polling:
   allowed_device_ids: []      # Empty = allow controllers in 'points:' (or e.g. [864077, 300])
 
 # External CDE (Kong API Gateway) Push Settings -> CDE Data Mart -> IMOPS
-# NOTE: Uses 'imops:' section so the deployed bacnet-gw.exe works with zero rebuild!
-#       Replace localhost with <CDE_SERVER_IP> when Kong runs on another LAN/VPN server.
+# NOTE: Keep section key as 'imops:' if using the previously installed bacnet-gw.exe,
+#       or use either 'imops:' or 'cde:' with the updated bacnet-gw.exe binary.
 imops:
   enabled: true
-  base_url: "http://localhost:8088"           # HTTP: http://<CDE_SERVER_IP>:8088 | HTTPS: https://<CDE_SERVER_IP>:8443
+  base_url: "https://isems-office-cde.somesolutions.xyz"
   telemetry_path: "/api/v1/bacnet/telemetry"
   devices_path: "/api/v1/bacnet/devices"
   packet_events_path: "/api/v1/bacnet/packets"
@@ -59,7 +59,7 @@ imops:
   batch_max_points: 100
   flush_interval_ms: 1500
   http_timeout_ms: 10000
-  verify_tls: false                           # Allows self-signed TLS if using https://<CDE_SERVER_IP>:8443
+  verify_tls: true
   max_retries: 3
   retry_base_backoff_ms: 500
   dry_run_log_payloads: false

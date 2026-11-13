@@ -83,41 +83,52 @@ All 12 points reside on **Optergy P864 (`device_id: 864077`, `192.168.0.160:4780
 
 | Setting | Configured Value for `zaarr-bacnet-gw-01` |
 | :--- | :--- |
-| **API Gateway Base URL (HTTP)** | `http://<CDE_SERVER_IP>:8088` *(or `http://localhost:8088` on same machine)* |
-| **API Gateway Base URL (HTTPS)** | `https://<CDE_SERVER_IP>:8443` *(with `verify_tls: false` for self-signed cert)* |
-| **1. Sensor Telemetry Push Endpoint** | `POST /api/v1/bacnet/telemetry` |
-| **2. Controller Discovery / Status Endpoint** | `POST /api/v1/bacnet/devices` |
-| **3. CDE Data Mart Verification Endpoint** | `GET /api/v1/bacnet/status` *(Header `X-API-Key` or `?apikey=zaarr-bacnet-gw01-key-2026`)* |
+| **Production API Gateway Base URL (HTTPS)** | `https://isems-office-cde.somesolutions.xyz` (`verify_tls: true`) |
+| **Local Dev API Gateway Base URL (HTTP)** | `http://localhost:8088` *(or `http://<CDE_SERVER_IP>:8088`)* |
+| **1. Sensor Telemetry Push Endpoint** | `POST /api/v1/bacnet/telemetry`<br>Prod URL: `https://isems-office-cde.somesolutions.xyz/api/v1/bacnet/telemetry` |
+| **2. Controller Discovery / Status Endpoint** | `POST /api/v1/bacnet/devices`<br>Prod URL: `https://isems-office-cde.somesolutions.xyz/api/v1/bacnet/devices` |
+| **3. CDE Data Mart Verification Endpoint** | `GET /api/v1/bacnet/status`<br>Prod URL: `https://isems-office-cde.somesolutions.xyz/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026` |
 | **Authentication Header** | `X-API-Key: zaarr-bacnet-gw01-key-2026` |
 | **Content-Type / User-Agent** | `Content-Type: application/json` / `User-Agent: zaarr-bacnet-gw/1.0` |
 | **Expected Success Response** | `HTTP 202 Accepted` (`{"status": "accepted", ...}`) |
 
 ### Ready-to-Use Block in `config.production.yaml`
-*(Note: Keep the section key as `imops:` so the already-deployed production `bacnet-gw.exe` works with zero rebuild; `cde:` is also supported as an alias in the latest binary.)*
+*(Important: If the VAST PC is still running yesterday's `bacnet-gw.exe`, use the **`imops:`** block below—it works without updating the `.exe`. If you copy today's updated `bacnet-gw.exe` onto the VAST PC, **both** `imops:` and `cde:` blocks work identically.)*
 
 ```yaml
-# External CDE (Kong API Gateway) Push Settings -> CDE Data Mart -> IMOPS
+# Option A (Recommended — works with BOTH existing and newly built bacnet-gw.exe):
 imops:
   enabled: true
-  base_url: "http://<CDE_SERVER_IP>:8088"      # Or https://<CDE_SERVER_IP>:8443
+  base_url: "https://isems-office-cde.somesolutions.xyz"
   telemetry_path: "/api/v1/bacnet/telemetry"
   devices_path: "/api/v1/bacnet/devices"
   packet_events_path: "/api/v1/bacnet/packets" # Only used if polling.forward_packet_events: true
-  auth_type: "api_key"                         # Supports: api_key | bearer | basic | login
+  auth_type: "api_key"
   api_key_header: "X-API-Key"
   api_key: "zaarr-bacnet-gw01-key-2026"
   batch_max_points: 100
   flush_interval_ms: 1500
   http_timeout_ms: 10000
-  verify_tls: false                            # Allows self-signed Kong TLS on :8443
+  verify_tls: true
   max_retries: 3
   retry_base_backoff_ms: 500
   dry_run_log_payloads: false
+
+# Option B (Alias supported in newly built bacnet-gw.exe from 2026-11-13+):
+cde:
+  enabled: true
+  base_url: "https://isems-office-cde.somesolutions.xyz"
+  telemetry_endpoint: "/api/v1/bacnet/telemetry"
+  devices_endpoint: "/api/v1/bacnet/devices"
+  api_key: "zaarr-bacnet-gw01-key-2026"
+  auth_header: "X-API-Key"
+  timeout_seconds: 10
+  verify_tls: true
 ```
 
-After restarting the Windows service, open:
+After restarting the Windows service on the VAST PC, open:
 1. Local Gateway Dashboard (`http://127.0.0.1:8090` on VAST PC) — confirm **IMOPS API Delivery** shows `Batches` and `Readings` incrementing with `Failed: 0`.
-2. CDE Data Mart Status (`http://<CDE_SERVER_IP>:8088/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026`) — confirm the 12 points are stored in CDE.
+2. Production CDE Data Mart Status (`https://isems-office-cde.somesolutions.xyz/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026`) — confirm the 12 points are stored in production CDE.
 
 ---
 
@@ -737,8 +748,8 @@ curl.exe "http://localhost:8088/api/v1/bacnet/status" -H "X-API-Key: zaarr-bacne
 ## 9. Rollout & Verification Checklist
 
 - [ ] **Step 1 (IMOPS):** IMOPS deploys ingestion endpoints + dashboard and shares `base_url` + auth credentials with CDE team.
-- [x] **Step 2 (CDE Kong API Gateway):** CDE deployed Kong routes (`POST /api/v1/bacnet/telemetry`, `POST /api/v1/bacnet/devices`, `GET /api/v1/bacnet/status`) on `:8088` (HTTP) / `:8443` (HTTPS) with `X-API-Key: zaarr-bacnet-gw01-key-2026`.
+- [x] **Step 2 (CDE Production Deployment):** Production CDE Kong API Gateway live at `https://isems-office-cde.somesolutions.xyz` (`POST /api/v1/bacnet/telemetry`, `POST /api/v1/bacnet/devices`, `GET /api/v1/bacnet/status`) with `X-API-Key: zaarr-bacnet-gw01-key-2026`.
 - [x] **Step 3 (Local End-to-End Test `bacnet-gw ➔ CDE Kong`):** Verified live delivery of both discrete dry-contact alarms (`BI-1`..`BI-7`) and continuous analog telemetry (`AI-101`, `AI-102`, `AV-27126`, `AI-201`, `AI-202`) into CDE via `start-sim.bat` + `sim-contacts.ps1`.
-- [ ] **Step 4 (Deploy / Enable on VAST PC Production):** Copy `dist\bacnet-gw-windows-amd64.zip` (or update `config.production.yaml`), replace `localhost` with `<CDE_SERVER_IP>` in `imops.base_url`, and restart the `bacnet-gw` Windows service.
-- [ ] **Step 5 (Live Physical Test):** Trigger one dry contact (e.g., `BI-2` Motion or `BI-7` Rack Door) and confirm instant COV propagation across `bacnet-gw` (`http://127.0.0.1:8090`) ➔ CDE (`http://<CDE_SERVER_IP>:8088/api/v1/bacnet/status`) ➔ IMOPS UI Dashboard.
+- [ ] **Step 4 (Deploy / Enable on VAST PC Production):** Copy `dist\bacnet-gw-windows-amd64.zip` (or update `config.production.yaml` with `https://isems-office-cde.somesolutions.xyz`) onto the VAST PC and restart the `bacnet-gw` Windows service.
+- [ ] **Step 5 (Live Physical Test):** Trigger one dry contact (e.g., `BI-2` Motion or `BI-7` Rack Door) and confirm instant COV propagation across `bacnet-gw` (`http://127.0.0.1:8090`) ➔ Production CDE (`https://isems-office-cde.somesolutions.xyz/api/v1/bacnet/status?apikey=zaarr-bacnet-gw01-key-2026`) ➔ IMOPS UI Dashboard.
 

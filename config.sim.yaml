@@ -33,14 +33,14 @@ polling:
 
 imops:
   enabled: true                           # Pushes simulated 12-sensor telemetry to CDE Kong API Gateway
-  base_url: "http://127.0.0.1:8088"       # CDE Kong API Gateway (use http://127.0.0.1:8085 for standalone mock receiver)
+  base_url: "http://127.0.0.1:8088"       # Local Kong (or use "https://isems-office-cde.somesolutions.xyz" for prod CDE)
   telemetry_path: "/api/v1/bacnet/telemetry"
   devices_path: "/api/v1/bacnet/devices"
   auth_type: "api_key"
   api_key_header: "X-API-Key"
   api_key: "zaarr-bacnet-gw01-key-2026"
   http_timeout_ms: 10000
-  verify_tls: false
+  verify_tls: true
   batch_max_points: 100
   flush_interval_ms: 500
 
