@@ -333,7 +333,7 @@ Please implement the CDE side of this pipeline:
 1. **CDE API Gateway Ingestion Endpoints** secured with `X-API-Key` to accept batched telemetry and controller status from `zaarr-bacnet-gw-01`.
 2. **Internal Queuing / Buffering (if standard in CDE):** Publish inbound batches to CDE's internal queue and return `202 Accepted` (or `200 OK`) immediately so edge requests complete in <50ms, with worker retries if IMOPS is temporarily unreachable.
 3. **Payload Transformation ("Massaging"):** Normalize raw BACnet telemetry into IMOPS's clean 12-sensor dashboard schema.
-4. **IMOPS Outbound Client:** Authenticate against IMOPS (supporting static API key / Bearer token or cached JWT login refresh on `401`) and `POST` the transformed updates to IMOPS.
+4. **IMOPS Outbound Client:** Authenticate against IMOPS (supporting HTTP Basic Auth `-u username:password`, static `Bearer` token / `X-API-Key`, or cached JWT login refresh on `401`) and `POST` the transformed updates to IMOPS.
 
 ---
 
@@ -542,9 +542,10 @@ Please build:
 ---
 
 ## 1. Authentication (CDE ➔ IMOPS)
-Please secure the ingestion endpoints using your standard server-to-server authentication and share the credentials with the CDE team:
-- **Option A (Simple M2M):** `X-API-Key: <secret>` or static `Authorization: Bearer <token>`
-- **Option B (OAuth2 / JWT Login):** Login endpoint returning a Bearer token (CDE will cache the token and refresh on `401 Unauthorized`).
+Please secure the ingestion endpoints using whichever server-to-server authentication method is easiest on IMOPS and share the credentials with the CDE team (CDE supports all of these):
+- **Option A (HTTP Basic Auth — `curl -u username:password`):** `Authorization: Basic <base64(username:password)>` over HTTPS
+- **Option B (Static Token / API Key):** `Authorization: Bearer <static_token>` or `X-API-Key: <secret>`
+- **Option C (OAuth2 / JWT Login):** Login endpoint (`POST` `username`/`password` ➔ returns `Bearer` JWT token; CDE caches it and refreshes on `401 Unauthorized`)
 
 ---
 
