@@ -150,7 +150,7 @@ Carries batched readings for the 12 sensors (`source_type: "poll"` every 5s, or 
 ```json
 {
   "gateway_id": "zaarr-bacnet-gw-01",
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "batch_id": "20261113T055500Z-18",
   "sent_at": "2026-11-13T05:55:00Z",
   "count": 2,
@@ -224,7 +224,7 @@ Reports the connectivity & hardware profile of the **Optergy P864 controller (`#
 ```json
 {
   "gateway_id": "zaarr-bacnet-gw-01",
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "sent_at": "2026-11-13T05:55:00Z",
   "device": {
     "device_id": 864077,
@@ -247,7 +247,7 @@ Reports the connectivity & hardware profile of the **Optergy P864 controller (`#
 ```json
 {
   "gateway_id": "zaarr-bacnet-gw-01",
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "sent_at": "2026-11-13T05:56:10Z",
   "device": {
     "device_id": 864077,
@@ -274,7 +274,7 @@ Only active if `polling.forward_packet_events: true` is enabled for deep BACnet/
 ```json
 {
   "gateway_id": "zaarr-bacnet-gw-01",
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "sent_at": "2026-11-13T05:55:00Z",
   "count": 1,
   "packets": [
@@ -350,7 +350,7 @@ Sent every ~1.5s–5s (5-second poll batches + immediate real-time COV notificat
 ```json
 {
   "gateway_id": "zaarr-bacnet-gw-01",
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "batch_id": "20261113T012000Z-42",
   "sent_at": "2026-11-13T01:20:00Z",
   "count": 2,
@@ -420,7 +420,7 @@ Sent on controller discovery, metadata sync, communication failure (`online: fal
 ```json
 {
   "gateway_id": "zaarr-bacnet-gw-01",
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "sent_at": "2026-11-13T01:20:00Z",
   "device": {
     "device_id": 864077,
@@ -465,7 +465,7 @@ Transform each `TelemetryBatchEnvelope` into the clean IMOPS payload below:
 ### Outbound Payload Sent by CDE ➔ IMOPS (`POST /api/v1/sensors/bacnet/updates`)
 ```json
 {
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "gateway_id": "zaarr-bacnet-gw-01",
   "batch_id": "20261113T012000Z-42",
   "controller": {
@@ -562,7 +562,7 @@ Please secure the ingestion endpoints using whichever server-to-server authentic
 - **Request JSON Schema (Sent by CDE):**
 ```json
 {
-  "site_name": "Smart Nation Exhibition System",
+  "site_name": "Malaysia International Trade and Exhibition Centre",
   "gateway_id": "zaarr-bacnet-gw-01",
   "batch_id": "20261113T012000Z-42",
   "controller": {

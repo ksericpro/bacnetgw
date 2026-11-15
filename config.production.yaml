@@ -4,7 +4,7 @@
 # ==============================================================================
 
 gateway_id: "zaarr-bacnet-gw-01"
-site_name: "Smart Nation Exhibition System"
+site_name: "Malaysia International Trade and Exhibition Centre"
 log_level: "info" # debug | info | warn | error
 
 # Local Web Dashboard (set listen_addr to "0.0.0.0:8090" to access from other LAN PCs)

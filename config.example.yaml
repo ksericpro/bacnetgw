@@ -4,7 +4,7 @@
 # ==============================================================================
 
 gateway_id: "zaarr-bacnet-gw-01"
-site_name: "Smart Nation Exhibition System"
+site_name: "Malaysia International Trade and Exhibition Centre"
 log_level: "info" # debug | info | warn | error
 
 status_api:
